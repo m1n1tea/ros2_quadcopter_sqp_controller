@@ -1,0 +1,280 @@
+from threading import Lock
+
+import numpy as np
+import rclpy
+from nav_msgs.msg import Path as PathMsg
+from px4_msgs.msg import (
+    ActuatorMotors,
+    OffboardControlMode,
+    VehicleCommand,
+    VehicleOdometry,
+    VehicleStatus,
+)
+from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+
+from .mpc_controller import Controller
+from .quadrotor_model import load_params
+
+
+class Px4MpcNode(Node):
+    def __init__(self):
+        super().__init__(
+            "px4_mpc_node", automatically_declare_parameters_from_overrides=True
+        )
+
+        self.path_topic = self.get_parameter("path_topic").value
+        self.odom_topic = self.get_parameter("odometry_topic").value
+        self.vehicle_status_topic = self.get_parameter("vehicle_status_topic").value
+        self.actuator_topic = self.get_parameter("actuator_topic").value
+        self.offboard_control_mode_topic = self.get_parameter(
+            "offboard_control_mode_topic"
+        ).value
+        self.vehicle_command_topic = self.get_parameter("vehicle_command_topic").value
+        self.control_rate_hz = float(self.get_parameter("control_rate_hz").value)
+        self.offboard_control_rate_hz = float(
+            self.get_parameter("offboard_control_rate_hz").value
+        )
+        self.preferred_speed = float(self.get_parameter("preferred_speed").value)
+        horizon_sec = float(self.get_parameter("horizon_sec").value)
+        horizon_nodes = int(self.get_parameter("horizon_nodes").value)
+        self.lock = Lock()
+        self.current_state = None
+        self.final_reference_point = None
+        self.final_point_reached_radius = 0.25
+        self.final_point_reached_logged = False
+        self.is_armed = False
+        self.offboard_setpoint_counter = 0
+        self.arm_sequence_sent = False
+        self.last_state_log_time_sec = -1.0
+
+        try:
+            quad = load_params(self)
+            self.controller = Controller(
+                quad=quad,
+                t_horizon=horizon_sec,
+                n_nodes=horizon_nodes,
+                logger=self.get_logger(),
+                expected_frequency = self.control_rate_hz,
+            )
+        except Exception as exc:
+            self.get_logger().error(f"Failed to initialize controller: {exc}")
+            raise
+
+        qos_sensor = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+
+        self.path_sub = self.create_subscription(
+            PathMsg, self.path_topic, self.path_callback, 10
+        )
+        self.odom_sub = self.create_subscription(
+            VehicleOdometry, self.odom_topic, self.odom_callback, qos_sensor
+        )
+        self.vehicle_status_sub = self.create_subscription(
+            VehicleStatus,
+            self.vehicle_status_topic,
+            self.vehicle_status_callback,
+            qos_sensor,
+        )
+        self.motor_pub = self.create_publisher(
+            ActuatorMotors, self.actuator_topic, qos_sensor
+        )
+        self.offboard_control_mode_pub = self.create_publisher(
+            OffboardControlMode, self.offboard_control_mode_topic, qos_sensor
+        )
+        self.vehicle_command_pub = self.create_publisher(
+            VehicleCommand, self.vehicle_command_topic, qos_sensor
+        )
+
+        self.control_timer = self.create_timer(
+            1.0 / self.control_rate_hz, self.control_loop
+        )
+        self.offboard_mode_timer = self.create_timer(
+            1.0 / self.offboard_control_rate_hz, self.publish_offboard_control_mode
+        )
+
+        self.get_logger().info(
+            "px4_mpc_node started. "
+            f"path={self.path_topic}, odom={self.odom_topic}, vehicle_status={self.vehicle_status_topic}, "
+            f"actuator={self.actuator_topic}, offboard_control_mode={self.offboard_control_mode_topic}, "
+            f"vehicle_command={self.vehicle_command_topic}"
+        )
+
+    def path_callback(self, msg: PathMsg) -> None:
+        if not msg.poses:
+            return
+
+        trajectory = np.array(
+            [
+                [pose.pose.position.x, pose.pose.position.y, pose.pose.position.z]
+                for pose in msg.poses
+            ],
+            dtype=float,
+        )
+
+        with self.lock:
+            self.final_reference_point = trajectory[-1].copy()
+            self.final_point_reached_logged = False
+            self.controller.update_trajectory(
+                trajectory, preferred_speed=self.preferred_speed
+            )
+
+        self.get_logger().info(f"Received trajectory with {len(trajectory)} waypoints")
+
+    def odom_callback(self, msg: VehicleOdometry) -> None:
+        position = np.array(
+            [msg.position[0], msg.position[1], msg.position[2]], dtype=float
+        )
+        quat = np.array([msg.q[0], msg.q[1], msg.q[2], msg.q[3]], dtype=float)
+        velocity = np.array(
+            [msg.velocity[0], msg.velocity[1], msg.velocity[2]], dtype=float
+        )
+        angular_velocity = np.array(
+            [msg.angular_velocity[0], msg.angular_velocity[1], msg.angular_velocity[2]],
+            dtype=float,
+        )
+
+        state = np.concatenate([position, quat, velocity, angular_velocity])
+
+        with self.lock:
+            self.current_state = state
+        if self.arm_sequence_sent:
+            self.get_logger().info(f"Updated state = {state}")
+
+    def vehicle_status_callback(self, msg: VehicleStatus) -> None:
+        if not hasattr(msg, "arming_state"):
+            return
+
+        armed_state = getattr(VehicleStatus, "ARMING_STATE_ARMED", 2)
+        is_armed_now = msg.arming_state == armed_state
+        with self.lock:
+            if is_armed_now == self.is_armed:
+                return
+            self.is_armed = is_armed_now
+
+        self.get_logger().info(f"Vehicle armed state changed: armed={self.is_armed}")
+
+    def publish_offboard_control_mode(self) -> None:
+        if self.current_state is None or self.controller.time_traj is None:
+                return
+        
+        msg = OffboardControlMode()
+        if hasattr(msg, "timestamp"):
+            msg.timestamp = int(self.get_clock().now().nanoseconds / 1000)
+
+        # Keep all modes disabled except direct actuator control.
+        for field in [
+            "position",
+            "velocity",
+            "acceleration",
+            "attitude",
+            "body_rate",
+            "thrust_and_torque",
+        ]:
+            if hasattr(msg, field):
+                setattr(msg, field, False)
+        if hasattr(msg, "direct_actuator"):
+            msg.direct_actuator = True
+        elif hasattr(msg, "actuator"):
+            msg.actuator = True
+
+        self.offboard_control_mode_pub.publish(msg)
+
+        if self.arm_sequence_sent:
+            return
+
+        if self.offboard_setpoint_counter == 10:
+            self.set_offboard_mode()
+            self.arm()
+            self.arm_sequence_sent = True
+            self.get_logger().info("Offboard mode set, vehicle armed")
+
+        if self.offboard_setpoint_counter < 11:
+            self.offboard_setpoint_counter += 1
+
+    def publish_vehicle_command(
+        self, command: int, param1: float = 0.0, param2: float = 0.0
+    ) -> None:
+        msg = VehicleCommand()
+        msg.command = command
+        msg.param1 = float(param1)
+        msg.param2 = float(param2)
+        msg.target_system = 1
+        msg.target_component = 1
+        msg.source_system = 1
+        msg.source_component = 1
+        msg.from_external = True
+        if hasattr(msg, "timestamp"):
+            msg.timestamp = int(self.get_clock().now().nanoseconds / 1000)
+        self.vehicle_command_pub.publish(msg)
+
+    def arm(self) -> None:
+        self.publish_vehicle_command(
+            VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM, param1=1.0
+        )
+
+    def set_offboard_mode(self) -> None:
+        self.publish_vehicle_command(
+            VehicleCommand.VEHICLE_CMD_DO_SET_MODE, param1=1.0, param2=6.0
+        )
+
+    def control_loop(self) -> None:
+        with self.lock:
+            if self.current_state is None or self.controller.time_traj is None:
+                return
+            current_position = self.current_state[:3].copy()
+            final_reference_point = (
+                None
+                if self.final_reference_point is None
+                else self.final_reference_point.copy()
+            )
+            should_log_final_point = False
+            final_distance = None
+            if final_reference_point is not None and not self.final_point_reached_logged:
+                final_distance = np.linalg.norm(current_position - final_reference_point)
+                if final_distance <= self.final_point_reached_radius:
+                    self.final_point_reached_logged = True
+                    should_log_final_point = True
+            cmd = self.controller.run_optimization(initial_state=self.current_state)
+
+        if should_log_final_point:
+            self.get_logger().info(
+                "Reached final reference point: "
+                f"position={current_position}, target={final_reference_point}, "
+                f"distance={final_distance:.3f} m"
+            )
+
+        cmd = np.clip(np.array(cmd[:4], dtype=float), 0.0, 1.0)
+
+        msg = ActuatorMotors()
+        timestamp_us = int(self.get_clock().now().nanoseconds / 1000)
+        if hasattr(msg, "timestamp"):
+            msg.timestamp = timestamp_us
+        if hasattr(msg, "timestamp_sample"):
+            msg.timestamp_sample = timestamp_us
+        if hasattr(msg, "reversible_flags"):
+            msg.reversible_flags = 0
+
+        control = [float("nan")] * 12
+        control[0:4] = [float(cmd[0]), float(cmd[1]), float(cmd[2]), float(cmd[3])]
+        msg.control = control
+
+        self.motor_pub.publish(msg)
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = Px4MpcNode()
+    try:
+        rclpy.spin(node)
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()
