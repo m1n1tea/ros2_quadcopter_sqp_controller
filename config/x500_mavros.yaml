@@ -1,16 +1,24 @@
-px4_mpc_node:
+mavros_mpc_node:
   ros__parameters:
     path_topic: /reference_path
-    odometry_topic: /fmu/out/vehicle_odometry
-    vehicle_status_topic: /fmu/out/vehicle_status
-    actuator_topic: /fmu/in/actuator_motors
-    offboard_control_mode_topic: /fmu/in/offboard_control_mode
-    vehicle_command_topic: /fmu/in/vehicle_command
+    odometry_topic: /mavros/local_position/odom
+    mavros_state_topic: /mavros/state
+    mavros_attitude_cmd_vel_topic: /mavros/setpoint_attitude/cmd_vel
+    mavros_attitude_thrust_topic: /mavros/setpoint_attitude/thrust
+    mavros_arming_service: /mavros/cmd/arming
+    mavros_set_mode_service: /mavros/set_mode
     control_rate_hz: 200.0
     offboard_control_rate_hz: 10.0
-    preferred_speed: 0.5
+    preferred_speed: 2.0
     horizon_sec: 2.0
     horizon_nodes: 40
+    final_point_reached_radius: 0.25
+    body_rate_limit: 4.0
+    mavros_thrust_scale: 1.0
+    mavros_min_thrust: 0.0
+    mavros_max_thrust: 1.0
+    arm_after_setpoints: true
+    set_offboard_after_setpoints: true
     uav:
       name: x500
       parameters:

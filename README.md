@@ -53,24 +53,24 @@ To build Acados from source, see instructions [here](https://docs.acados.org/pyt
 
 Clone acados and its submodules by running:
 ```
-$ git clone https://github.com/acados/acados.git
-$ cd acados
-$ git submodule update --recursive --init
+git clone https://github.com/acados/acados.git
+cd acados
+git submodule update --recursive --init
 ```
 
 Install acados as follows:
 
 ```
-$ mkdir -p build
-$ cd build
-$ cmake -DACADOS_WITH_QPOASES=ON ..
-$ make install -j4
+mkdir -p build
+cd build
+cmake -DACADOS_WITH_QPOASES=ON ..
+make install -j4
 ```
 
 Install acados_template Python package:
 ```
-$ cd acados
-$ pip install -e interfaces/acados_template
+cd acados
+pip install -e interfaces/acados_template
 ```
 ***Note:*** The ```<acados_root>``` is the full path from ```/home/```.
 

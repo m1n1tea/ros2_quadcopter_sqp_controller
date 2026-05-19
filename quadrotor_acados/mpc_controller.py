@@ -1,5 +1,3 @@
-import random
-
 import casadi as cs
 import numpy as np
 from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
@@ -13,7 +11,6 @@ from .math_utils import (
 )
 from .quadrotor_model import QuadrotorParams
 import math
-
 
 class Controller:
     FRAME_TRANSFORM = np.array(
@@ -165,8 +162,6 @@ class Controller:
                 else solver_options.get("solver_type", "SQP_RTI")
             )
 
-            # build_dir = Path("/tmp/quadrotor_acados")
-            # build_dir.mkdir(parents=True, exist_ok=True)
             json_file = str(f"{key_model.name}_acados_ocp.json")
             self.acados_ocp_solver = AcadosOcpSolver(ocp, json_file=json_file)
 
@@ -174,9 +169,6 @@ class Controller:
         self.last_closest_index = 0
 
         self.logger = logger
-        self.counter = 0
-        self.predicted_change = None
-        self.prev_state = None
         if self.logger:
             self.logger.info(f"Controller time horizon = {t_horizon}")
             self.logger.info(f"Controller steps = {n_nodes}")
@@ -311,10 +303,6 @@ class Controller:
         self.acados_ocp_solver.set(0, "lbx", x_init)
         self.acados_ocp_solver.set(0, "ubx", x_init)
 
-        # solve_frame_id = random.getrandbits(64)
-        # if self.logger and self.counter % 5 == 0:
-        #     self.logger.info(f"Start solving {solve_frame_id}")
-
         starting_index = (
             np.argmin(
                 np.sum(
@@ -395,22 +383,5 @@ class Controller:
             w_opt_acados[i, :] = self.acados_ocp_solver.get(i, "u")
             x_opt_acados[i + 1, :] = self.acados_ocp_solver.get(i + 1, "x")
         w_opt_acados = np.reshape(w_opt_acados, (-1))
-
-        # if self.logger and self.counter % 10 == 0 and self.prev_state is not None:
-        #     # self.logger.info(f"Finish solving {solve_frame_id}")
-        #     self.logger.info(f"current state = {x_init}")
-        #     self.logger.info(f"predicted trajectory next state = {x_opt_acados[1]}")
-        #     self.logger.info(
-        #         f"relative prediction error = {(self.predicted_change / (x_init - self.prev_state))}"
-        #     )
-        #     self.logger.info(
-        #         f"absolute prediction error = {(self.predicted_change - (x_init - self.prev_state))}"
-        #     )
-        #self.logger.info(f"control = {w_opt_acados[:4]}")
-        # if self.counter % 10 == 0:
-        #     self.predicted_change = x_opt_acados[1] - x_init
-        #     self.prev_state = x_init
-
-        self.counter += 1
 
         return w_opt_acados[:4]
