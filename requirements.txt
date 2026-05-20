@@ -1,7 +1,6 @@
 # Pip-installable Python dependencies used by this repository.
 # acados/acados_template is intentionally excluded.
 numpy
-PyYAML
 casadi
 scipy
 setuptools

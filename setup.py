@@ -35,6 +35,7 @@ setup(
         "console_scripts": [
             "px4_mpc_node = quadrotor_acados.ros2_px4_mpc_node:main",
             "px4_pid_node = quadrotor_acados.ros2_px4_pid_node:main",
+            "px4_motor_sequence_node = quadrotor_acados.ros2_px4_motor_sequence_node:main",
             "path_publisher = quadrotor_acados.path_publisher:main",
         ],
     },

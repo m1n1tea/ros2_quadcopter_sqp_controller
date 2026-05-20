@@ -28,6 +28,16 @@ If you run the node directly, load the same config explicitly:
 ros2 run quadrotor_acados px4_mpc_node --ros-args --params-file $(ros2 pkg prefix quadrotor_acados)/share/quadrotor_acados/config/x500.yaml
 ```
 
+## PX4 Motor Sequence Node
+For low-level motor checks, `px4_motor_sequence_node` publishes small direct
+`ActuatorMotors` pulses to motors one by one. By default it does not arm the
+vehicle; set `auto_arm:=true` only when the vehicle is safe for direct actuator
+testing.
+
+```bash
+ros2 run quadrotor_acados px4_motor_sequence_node
+```
+
 ## Sample Trajectory Publisher
 The package includes a ROS 2 node that publishes an Nx3 `.npy` reference trajectory as `nav_msgs/msg/Path`.
 
