@@ -35,7 +35,7 @@ vehicle; set `auto_arm:=true` only when the vehicle is safe for direct actuator
 testing.
 
 ```bash
-ros2 run quadrotor_acados px4_motor_sequence_node
+ros2 run quadrotor_acados px4_motor_sequence_node --ros-args -p base_value:=-1.0 -p pulse_value:=-1.0 -p stop_value:=-1.0
 ```
 
 ## Sample Trajectory Publisher

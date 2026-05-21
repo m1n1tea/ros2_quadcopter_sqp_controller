@@ -116,7 +116,7 @@ class Px4MotorSequenceNode(Node):
 
     @staticmethod
     def _clip_control(value: float) -> float:
-        return min(max(float(value), 0.0), 1.0)
+        return min(max(float(value), -1.0), 1.0)
 
     def vehicle_status_callback(self, msg: VehicleStatus) -> None:
         if not hasattr(msg, "arming_state"):
