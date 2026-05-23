@@ -196,6 +196,9 @@ class Px4MotorSequenceNode(Node):
         )
 
     def control_loop(self) -> None:
+
+        self.publish_offboard_control_mode()
+
         now_sec = self._now_sec()
         motor_index = None
         value = self.base_value
