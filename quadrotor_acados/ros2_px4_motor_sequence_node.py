@@ -155,13 +155,13 @@ class Px4MotorSequenceNode(Node):
         if not self.auto_arm or self.arm_sequence_sent:
             return
 
-        if self.offboard_setpoint_counter == 10:
+        if self.offboard_setpoint_counter == math.ceil(self.offboard_control_rate_hz):
             self.set_offboard_mode()
             self.arm()
             self.arm_sequence_sent = True
             self.get_logger().info("Offboard mode set, vehicle arm requested")
 
-        if self.offboard_setpoint_counter < 11:
+        if self.offboard_setpoint_counter <= math.ceil(self.offboard_control_rate_hz):
             self.offboard_setpoint_counter += 1
 
     def publish_vehicle_command(
