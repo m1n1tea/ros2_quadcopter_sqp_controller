@@ -189,8 +189,8 @@ class Px4MpcNode(Node):
 
         with self.lock:
             self.current_state = state
-        # if self.arm_sequence_sent:
-        #     self.get_logger().info(f"Updated state = {state}")
+        if self.arm_sequence_sent:
+            self.get_logger().info(f"Updated state = {state}")
 
     def vehicle_status_callback(self, msg: VehicleStatus) -> None:
         if not hasattr(msg, "arming_state"):
