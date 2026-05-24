@@ -337,6 +337,7 @@ class Px4MpcNode(Node):
 
             control = [float("nan")] * 12
             control[0:4] = [float(cmd[0]), float(cmd[1]), float(cmd[2]), float(cmd[3])]
+            self.get_logger().info(f"Send control = {list(cmd)}")
             msg.control = control
             self.motor_pub.publish(msg)
 
