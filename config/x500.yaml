@@ -10,7 +10,7 @@ px4_mpc_node:
     vehicle_command_topic: /fmu/in/vehicle_command
     control_rate_hz: 200.0
     offboard_control_rate_hz: 10.0
-    preferred_speed: 0.5
+    preferred_speed: 1.0
     horizon_sec: 2.0
     horizon_nodes: 40
     uav:

@@ -70,6 +70,8 @@ class Px4MpcNode(Node):
             )
         self.lock = Lock()
         self.current_state = None
+        self.state_update_seq = 0
+        self.last_optimized_state_update_seq = 0
         self.final_reference_point = None
         self.final_point_reached_radius = 0.25
         self.final_point_reached_logged = False
@@ -187,6 +189,7 @@ class Px4MpcNode(Node):
 
         with self.lock:
             self.current_state = state
+            self.state_update_seq += 1
         if self.arm_sequence_sent:
             self.get_logger().info(f"Updated state = {state}")
 
@@ -280,7 +283,10 @@ class Px4MpcNode(Node):
             if self.current_state is None or self.controller.time_traj is None:
                 return
             self.publish_offboard_control_mode()
+            if self.state_update_seq == self.last_optimized_state_update_seq:
+                return
             current_state = self.current_state.copy()
+            self.last_optimized_state_update_seq = self.state_update_seq
             current_position = current_state[:3].copy()
             final_reference_point = (
                 None
@@ -294,7 +300,7 @@ class Px4MpcNode(Node):
                 if final_distance <= self.final_point_reached_radius:
                     self.final_point_reached_logged = True
                     should_log_final_point = True
-            cmd = self.controller.run_optimization(initial_state=current_state)
+            cmd, next_x = self.controller.run_optimization(initial_state=current_state)
 
         if should_log_final_point:
             self.get_logger().info(
@@ -306,12 +312,11 @@ class Px4MpcNode(Node):
         cmd = np.clip(np.array(cmd[:4], dtype=float), 0.0, 1.0)
         next_state_xyz = self.controller.integrate_control_step(current_state, cmd)
         self.get_logger().info(
-            f"Predicted next state: {self.controller.state_ned_to_xyz(current_state)}"
+            f"Current state: {self.controller.state_ned_to_xyz(current_state)}"
         )
-        self.get_logger().info(f"Send control = {list(cmd)}")
         self.get_logger().info(f"Predicted next state: {next_state_xyz}")
         if self.command_output_mode == "vehicle_rates_setpoint":
-            body_rates_px4 = Controller.xyz_to_ned_vector(next_state_xyz[10:13])
+            body_rates_px4 = Controller.xyz_to_ned_vector(next_x[10:13])
             normalized_thrust = self.motor_command_to_thrust(cmd)
             with self.lock:
                 self.last_body_rates = body_rates_px4.copy()
@@ -324,9 +329,11 @@ class Px4MpcNode(Node):
             msg.pitch = float(body_rates_px4[1])
             msg.yaw = float(body_rates_px4[2])
             msg.thrust_body = [0.0, 0.0, -float(normalized_thrust)]
+            self.get_logger().info(f"Send control: rates = {list(body_rates_px4)}, thrust = {float(normalized_thrust)}")
             self.vehicle_rates_setpoint_pub.publish(msg)
 
         if  self.command_output_mode == "actuator_motors":
+            self.get_logger().info(f"Send control = {list(cmd)}")
             msg = ActuatorMotors()
             timestamp_us = int(self.get_clock().now().nanoseconds / 1000)
             if hasattr(msg, "timestamp"):

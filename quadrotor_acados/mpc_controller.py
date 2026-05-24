@@ -426,4 +426,4 @@ class Controller:
             x_opt_acados[i + 1, :] = self.acados_ocp_solver.get(i + 1, "x")
         w_opt_acados = np.reshape(w_opt_acados, (-1))
 
-        return w_opt_acados[:4]
+        return w_opt_acados[:4], x_opt_acados[1]
