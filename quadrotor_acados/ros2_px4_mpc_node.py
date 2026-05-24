@@ -88,9 +88,7 @@ class Px4MpcNode(Node):
                 n_nodes=horizon_nodes,
                 logger=self.get_logger(),
                 expected_frequency=self.control_rate_hz,
-                enable_integrator=(
-                    self.command_output_mode == "vehicle_rates_setpoint"
-                ),
+                enable_integrator=True,
             )
         except Exception as exc:
             self.get_logger().error(f"Failed to initialize controller: {exc}")
@@ -306,8 +304,13 @@ class Px4MpcNode(Node):
             )
 
         cmd = np.clip(np.array(cmd[:4], dtype=float), 0.0, 1.0)
+        next_state_xyz = self.controller.integrate_control_step(current_state, cmd)
+        self.get_logger().info(
+            f"Predicted next state: {self.controller.state_ned_to_xyz(current_state)}"
+        )
+        self.get_logger().info(f"Send control = {list(cmd)}")
+        self.get_logger().info(f"Predicted next state: {next_state_xyz}")
         if self.command_output_mode == "vehicle_rates_setpoint":
-            next_state_xyz = self.controller.integrate_control_step(current_state, cmd)
             body_rates_px4 = Controller.xyz_to_ned_vector(next_state_xyz[10:13])
             normalized_thrust = self.motor_command_to_thrust(cmd)
             with self.lock:
@@ -321,8 +324,6 @@ class Px4MpcNode(Node):
             msg.pitch = float(body_rates_px4[1])
             msg.yaw = float(body_rates_px4[2])
             msg.thrust_body = [0.0, 0.0, -float(normalized_thrust)]
-            self.get_logger().info(f"Current state: {self.controller.state_ned_to_xyz(current_state)}")
-            self.get_logger().info(f"Predicted next state: {next_state_xyz}")
             self.vehicle_rates_setpoint_pub.publish(msg)
 
         if  self.command_output_mode == "actuator_motors":
@@ -337,7 +338,6 @@ class Px4MpcNode(Node):
 
             control = [float("nan")] * 12
             control[0:4] = [float(cmd[0]), float(cmd[1]), float(cmd[2]), float(cmd[3])]
-            self.get_logger().info(f"Send control = {list(cmd)}")
             msg.control = control
             self.motor_pub.publish(msg)
 
