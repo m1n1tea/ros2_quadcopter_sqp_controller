@@ -281,7 +281,7 @@ class Px4MpcNode(Node):
         with self.lock:
             if self.current_state is None or self.controller.time_traj is None:
                 return
-            self.publish_offboard_control_mode
+            self.publish_offboard_control_mode()
             current_state = self.current_state.copy()
             current_position = current_state[:3].copy()
             final_reference_point = (
