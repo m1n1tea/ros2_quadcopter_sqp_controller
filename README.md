@@ -4,7 +4,8 @@
 This repository now includes a ROS 2 package `quadrotor_acados` that:
 - subscribes to `nav_msgs/msg/Path` (reference trajectory),
 - subscribes to `px4_msgs/msg/VehicleOdometry` (current state),
-- publishes `px4_msgs/msg/ActuatorMotors` (motor command).
+- publishes `px4_msgs/msg/ActuatorMotors` by default, or
+  `px4_msgs/msg/VehicleRatesSetpoint` when configured.
 
 The launch file uses `quadrotor_acados/config/x500.yaml` by default.
 
@@ -22,6 +23,10 @@ pip install -r requirements.txt
 ```
 
 Topic names and node runtime parameters are defined in `quadrotor_acados/config/x500.yaml`.
+Set `command_output_mode: vehicle_rates_setpoint` to publish body-rate/thrust
+setpoints on `vehicle_rates_setpoint_topic` instead of direct motor commands.
+The node transforms the internally optimized body rates back to PX4 NED/FRD
+before publishing the rates setpoint.
 
 If you run the node directly, load the same config explicitly:
 ```bash
@@ -35,7 +40,7 @@ vehicle; set `auto_arm:=true` only when the vehicle is safe for direct actuator
 testing.
 
 ```bash
-ros2 run quadrotor_acados px4_motor_sequence_node --ros-args -p base_value:=-1.0 -p pulse_value:=-1.0 -p stop_value:=-1.0
+ros2 run quadrotor_acados px4_motor_sequence_node --ros-args -p base_value:=0.1
 ```
 
 ## Sample Trajectory Publisher

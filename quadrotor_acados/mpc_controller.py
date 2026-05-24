@@ -1,6 +1,12 @@
 import casadi as cs
 import numpy as np
-from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
+from acados_template import (
+    AcadosModel,
+    AcadosOcp,
+    AcadosOcpSolver,
+    AcadosSim,
+    AcadosSimSolver,
+)
 from pyquaternion import Quaternion
 
 from .math_utils import (
@@ -19,6 +25,10 @@ class Controller:
 
     @staticmethod
     def ned_to_xyz_vector(vec: np.ndarray) -> np.ndarray:
+        return Controller.FRAME_TRANSFORM @ np.asarray(vec, dtype=float)
+
+    @staticmethod
+    def xyz_to_ned_vector(vec: np.ndarray) -> np.ndarray:
         return Controller.FRAME_TRANSFORM @ np.asarray(vec, dtype=float)
 
     @staticmethod
@@ -58,6 +68,7 @@ class Controller:
         rdrv_d_mat=None,
         model_name: str = "quad_3d_acados_mpc",
         solver_options=None,
+        enable_integrator: bool = False,
         logger=None,
     ):
         if q_cost is None:
@@ -73,9 +84,11 @@ class Controller:
         self.max_u = quad.max_input_value
         self.min_u = quad.min_input_value
         self.dt = self.T / self.N
+        self.control_dt = self.dt
         self.substeps = 1
         if expected_frequency is not None:
             self.substeps = math.ceil(expected_frequency * self.dt)
+            self.control_dt = 1.0 / expected_frequency
 
         self.p = cs.MX.sym("p", 3)
         self.q = cs.MX.sym("a", 4)
@@ -110,7 +123,9 @@ class Controller:
             q_mask = np.concatenate((q_mask[:3], np.zeros(1), q_mask[3:]))
             q_diagonal *= q_mask
 
+        self.model = None
         for key_model in acados_models.values():
+            self.model = key_model
             nx = key_model.x.size()[0]
             nu = key_model.u.size()[0]
             ny = nx + nu
@@ -165,6 +180,9 @@ class Controller:
             json_file = str(f"{key_model.name}_acados_ocp.json")
             self.acados_ocp_solver = AcadosOcpSolver(ocp, json_file=json_file)
 
+        self.acados_sim_solver = (
+            self.create_integrator(self.model) if enable_integrator else None
+        )
         self.time_traj = None
         self.last_closest_index = 0
 
@@ -173,6 +191,17 @@ class Controller:
             self.logger.info(f"Controller time horizon = {t_horizon}")
             self.logger.info(f"Controller steps = {n_nodes}")
             self.logger.info(f"Controller dt = {self.dt}")
+            self.logger.info(f"Controller integration dt = {self.control_dt}")
+
+    def create_integrator(self, model: AcadosModel) -> AcadosSimSolver:
+        sim = AcadosSim()
+        sim.model = model
+        sim.solver_options.T = self.control_dt
+        sim.solver_options.integrator_type = "ERK"
+        sim.solver_options.num_stages = 4
+        sim.solver_options.num_steps = 1
+        json_file = str(f"{model.name}_acados_sim.json")
+        return AcadosSimSolver(sim, json_file=json_file)
 
     def acados_setup_model(self, nominal, model_name):
         def fill_in_acados_model(x, u, p, dynamics, name):
@@ -287,6 +316,23 @@ class Controller:
         # self.logger.info(f"Got new trajectory = {self.time_traj}")
         self.last_closest_index = 0
 
+    def state_ned_to_xyz(self, state: np.ndarray) -> np.ndarray:
+        xyz_state = np.array(state, dtype=float, copy=True)
+        xyz_state[0:3] = self.ned_to_xyz_vector(xyz_state[0:3])
+        xyz_state[3:7] = self.ned_to_xyz_quat(xyz_state[3:7])
+        xyz_state[7:10] = self.ned_to_xyz_vector(xyz_state[7:10])
+        xyz_state[10:13] = self.ned_to_xyz_vector(xyz_state[10:13])
+        return xyz_state
+
+    def integrate_control_step(
+        self, initial_state: np.ndarray, cmd: np.ndarray
+    ) -> np.ndarray:
+        if self.acados_sim_solver is None:
+            self.acados_sim_solver = self.create_integrator(self.model)
+        x_init = self.state_ned_to_xyz(initial_state)
+        u = np.array(cmd[:4], dtype=float, copy=True)
+        return np.asarray(self.acados_sim_solver.simulate(x=x_init, u=u), dtype=float)
+
     def run_optimization(self, initial_state=None):
         if self.time_traj is None or len(self.time_traj) == 0:
             return np.zeros(4)
@@ -294,11 +340,7 @@ class Controller:
         if initial_state is None:
             initial_state = [0, 0, 0] + [1, 0, 0, 0] + [0, 0, 0] + [0, 0, 0]
 
-        x_init = np.array(initial_state, dtype=float, copy=True)
-        x_init[0:3] = self.ned_to_xyz_vector(x_init[0:3])
-        x_init[3:7] = self.ned_to_xyz_quat(x_init[3:7])
-        x_init[7:10] = self.ned_to_xyz_vector(x_init[7:10])
-        x_init[10:13] = self.ned_to_xyz_vector(x_init[10:13])
+        x_init = self.state_ned_to_xyz(initial_state)
 
         self.acados_ocp_solver.set(0, "lbx", x_init)
         self.acados_ocp_solver.set(0, "ubx", x_init)

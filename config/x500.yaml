@@ -3,7 +3,9 @@ px4_mpc_node:
     path_topic: /reference_path
     odometry_topic: /fmu/out/vehicle_odometry
     vehicle_status_topic: /fmu/out/vehicle_status
+    command_output_mode: vehicle_rates_setpoint # actuator_motors or vehicle_rates_setpoint
     actuator_topic: /fmu/in/actuator_motors
+    vehicle_rates_setpoint_topic: /fmu/in/vehicle_rates_setpoint
     offboard_control_mode_topic: /fmu/in/offboard_control_mode
     vehicle_command_topic: /fmu/in/vehicle_command
     control_rate_hz: 200.0
