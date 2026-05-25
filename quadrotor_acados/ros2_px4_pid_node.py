@@ -189,7 +189,7 @@ class Px4PidNode(Node):
         with self.lock:
             if self.current_position is None or self.reference_trajectory is None:
                 return
-
+            self.publish_offboard_control_mode()
             last_idx = len(self.reference_trajectory) - 1
             while self.current_waypoint_idx < last_idx:
                 target = self.reference_trajectory[self.current_waypoint_idx]
