@@ -93,7 +93,7 @@ def generate_square_path(
 
 
 def generate_up_path(
-    altitude_m: float = -3.0,
+    altitude_m: float = -0.1,
     points: int = 120,
 ) -> np.ndarray:
     points = max(2, int(points))
