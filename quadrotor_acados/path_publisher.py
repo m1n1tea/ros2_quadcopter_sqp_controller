@@ -5,6 +5,7 @@ import rclpy
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 
 
 class PathPublisher(Node):
@@ -14,12 +15,27 @@ class PathPublisher(Node):
         self.declare_parameter("path_topic", "/reference_path")
         self.declare_parameter("frame_id", "map")
         self.declare_parameter("points_file", "")
+        self.declare_parameter("wait_for_subscribers_sec", 5.0)
+        self.declare_parameter("keep_alive_sec", 10.0)
 
         self.path_topic = str(self.get_parameter("path_topic").value)
         self.frame_id = str(self.get_parameter("frame_id").value)
         self.points_file = str(self.get_parameter("points_file").value)
+        self.wait_for_subscribers_sec = float(
+            self.get_parameter("wait_for_subscribers_sec").value
+        )
+        self.keep_alive_sec = float(self.get_parameter("keep_alive_sec").value)
 
-        self.publisher = self.create_publisher(Path, self.path_topic, 10)
+        qos_reference_path = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+
+        self.publisher = self.create_publisher(
+            Path, self.path_topic, qos_reference_path
+        )
         self.path_msg = self._build_path_message()
 
         self.get_logger().info(
@@ -71,14 +87,48 @@ class PathPublisher(Node):
         for pose in self.path_msg.poses:
             pose.header.stamp = now
         self.publisher.publish(self.path_msg)
-        self.get_logger().info("Reference path published once.")
+        self.get_logger().info("Reference path published.")
+
+    def wait_for_subscribers(self) -> None:
+        if self.wait_for_subscribers_sec <= 0.0:
+            return
+
+        deadline = (
+            self.get_clock().now().nanoseconds
+            + int(self.wait_for_subscribers_sec * 1e9)
+        )
+        while (
+            rclpy.ok()
+            and self.publisher.get_subscription_count() == 0
+            and self.get_clock().now().nanoseconds < deadline
+        ):
+            rclpy.spin_once(self, timeout_sec=0.1)
+
+        count = self.publisher.get_subscription_count()
+        if count == 0:
+            self.get_logger().warn(
+                "Publishing reference path with no matched subscribers. "
+                "The transient-local publisher will stay alive briefly for late joiners."
+            )
+        else:
+            self.get_logger().info(f"Matched {count} reference path subscriber(s).")
+
+    def keep_alive(self) -> None:
+        if self.keep_alive_sec <= 0.0:
+            return
+
+        deadline = self.get_clock().now().nanoseconds + int(self.keep_alive_sec * 1e9)
+        while rclpy.ok() and self.get_clock().now().nanoseconds < deadline:
+            rclpy.spin_once(self, timeout_sec=0.1)
 
 
 def main(args=None) -> None:
     rclpy.init(args=args)
     node = PathPublisher()
     try:
+        node.wait_for_subscribers()
         node.publish_path()
+        node.keep_alive()
     except KeyboardInterrupt:
         pass
     finally:

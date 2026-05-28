@@ -63,6 +63,15 @@ ros2 launch quadrotor_acados launch_path_publisher.py \
   points_file:=/absolute/path/to/trajectories/square_path.npy
 ```
 
+The reference path topic uses reliable transient-local QoS so controllers can
+receive the last path even if DDS discovery finishes slightly after publication.
+The sample publisher waits up to 5 seconds for a subscriber and remains alive
+for 10 seconds after publishing. If publishing paths manually, use matching QoS:
+```bash
+ros2 topic pub --once --qos-reliability reliable --qos-durability transient_local \
+  /reference_path nav_msgs/msg/Path "{...}"
+```
+
 ## Install Acados
 To build Acados from source, see instructions [here](https://docs.acados.org/python_interface/index.html) or as follows:
 

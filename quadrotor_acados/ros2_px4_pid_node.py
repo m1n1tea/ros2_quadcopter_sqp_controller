@@ -45,8 +45,15 @@ class Px4PidNode(Node):
             depth=1,
         )
 
+        qos_reference_path = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+
         self.path_sub = self.create_subscription(
-            PathMsg, self.path_topic, self.path_callback, 10
+            PathMsg, self.path_topic, self.path_callback, qos_reference_path
         )
         self.odom_sub = self.create_subscription(
             VehicleOdometry, self.odom_topic, self.odom_callback, qos_sensor
