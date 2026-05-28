@@ -107,10 +107,58 @@ def generate_up_path(
     return np.column_stack((x_samples, y_samples, z_samples))
 
 
+def generate_up_diagonal_down_path(
+    up_m: float = 0.5,
+    diagonal_x_m: float = 0.5,
+    diagonal_y_m: float = 0.5,
+    down_m: float = 0.45,
+    points_per_segment: int = 120,
+) -> np.ndarray:
+    points_per_segment = max(2, int(points_per_segment))
+    up_m = float(up_m)
+    diagonal_x_m = float(diagonal_x_m)
+    diagonal_y_m = float(diagonal_y_m)
+    down_m = float(down_m)
+
+    u = np.linspace(0.0, 1.0, points_per_segment)
+    smooth_u = 3.0 * u**2 - 2.0 * u**3
+
+    up_segment = np.column_stack(
+        (
+            np.zeros(points_per_segment, dtype=float),
+            np.zeros(points_per_segment, dtype=float),
+            -up_m * smooth_u,
+        )
+    )
+    diagonal_segment = np.column_stack(
+        (
+            diagonal_x_m * smooth_u,
+            diagonal_y_m * smooth_u,
+            np.full(points_per_segment, -up_m, dtype=float),
+        )
+    )
+    down_segment = np.column_stack(
+        (
+            np.full(points_per_segment, diagonal_x_m, dtype=float),
+            np.full(points_per_segment, diagonal_y_m, dtype=float),
+            -up_m + down_m * smooth_u,
+        )
+    )
+
+    return np.vstack(
+        (
+            up_segment,
+            diagonal_segment[1:],
+            down_segment[1:],
+        )
+    )
+
+
 PATH_GENERATORS: dict[str, PathGenerator] = {
     "spiral": generate_spiral_path,
     "square": generate_square_path,
     "up": generate_up_path,
+    "up_diagonal_down": generate_up_diagonal_down_path,
 }
 
 
