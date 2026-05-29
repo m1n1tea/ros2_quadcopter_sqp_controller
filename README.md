@@ -72,6 +72,17 @@ ros2 topic pub --once --qos-reliability reliable --qos-durability transient_loca
   /reference_path nav_msgs/msg/Path "{...}"
 ```
 
+To send a single-point reference path, defaulting to `(0, 0, -0.1)`:
+```bash
+ros2 run quadrotor_acados single_point_path_publisher
+```
+
+Override the point with parameters:
+```bash
+ros2 run quadrotor_acados single_point_path_publisher --ros-args \
+  -p x:=0.0 -p y:=0.0 -p z:=-1.0
+```
+
 ## Install Acados
 To build Acados from source, see instructions [here](https://docs.acados.org/python_interface/index.html) or as follows:
 

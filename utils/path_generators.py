@@ -93,7 +93,7 @@ def generate_square_path(
 
 
 def generate_up_path(
-    altitude_m: float = -0.1,
+    altitude_m: float = -0.5,
     points: int = 120,
 ) -> np.ndarray:
     points = max(2, int(points))
@@ -153,6 +153,62 @@ def generate_up_diagonal_down_path(
         )
     )
 
+def generate_down_path(
+    altitude_m_start: float = -0.5,
+    altitude_m_end: float = -0.05,
+    points: int = 120,
+) -> np.ndarray:
+    points = max(2, int(points))
+    u = np.linspace(0.0, 1.0, points)
+    smooth_u = 3.0 * u**2 - 2.0 * u**3
+    x_samples = np.zeros(points, dtype=float)
+    y_samples = np.zeros(points, dtype=float)
+    z_samples = float(altitude_m_end - altitude_m_start) * smooth_u + altitude_m_start
+
+    return np.column_stack((x_samples, y_samples, z_samples))
+
+def generate_circle_path(
+    radius_m: float = 1.0,
+    turns: float = 0.8,
+    points_per_segment: int = 80,
+    altitude_m: float = -0.5,
+) -> np.ndarray:
+    radius_m = max(0.01, float(radius_m))
+    turns = max(0.25, float(turns))
+    points_per_segment = max(8, int(points_per_segment))
+
+    u = np.linspace(0.0, 1.0, points_per_segment)
+    theta = 2.0 * math.pi * turns * u
+
+    up_segment = np.column_stack(
+        (
+            np.zeros(points_per_segment, dtype=float),
+            np.zeros(points_per_segment, dtype=float),
+            altitude_m * smooth_u,
+        )
+    )
+    forward_segment = np.column_stack(
+        (
+            np.full(points_per_segment, 0, dtype=float),
+            radius * smooth_u,
+            np.full(points_per_segment, altitude_m, dtype=float),
+        )
+    )
+    circle_segment = np.column_stack(
+        (
+            radius * np.cos(theta),
+            radius * np.sin(theta),
+            np.full(points_per_segment, altitude_m, dtype=float),
+        )
+    )
+
+    return np.vstack(
+        (
+            up_segment,
+            forward_segment[1:],
+            circle_segment[1:],
+        )
+    )
 
 PATH_GENERATORS: dict[str, PathGenerator] = {
     "spiral": generate_spiral_path,

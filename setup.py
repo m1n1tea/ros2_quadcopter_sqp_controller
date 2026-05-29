@@ -37,6 +37,8 @@ setup(
             "px4_pid_node = quadrotor_acados.ros2_px4_pid_node:main",
             "px4_motor_sequence_node = quadrotor_acados.ros2_px4_motor_sequence_node:main",
             "path_publisher = quadrotor_acados.path_publisher:main",
+            "single_point_path_publisher = "
+            "quadrotor_acados.single_point_path_publisher:main",
         ],
     },
 )
