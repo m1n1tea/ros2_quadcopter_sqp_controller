@@ -215,6 +215,8 @@ PATH_GENERATORS: dict[str, PathGenerator] = {
     "square": generate_square_path,
     "up": generate_up_path,
     "up_diagonal_down": generate_up_diagonal_down_path,
+    "down" : generate_down_path,
+    "circle" : generate_circle_path
 }
 
 
