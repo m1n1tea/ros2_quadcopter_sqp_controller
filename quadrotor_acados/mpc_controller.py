@@ -1,4 +1,5 @@
 import casadi as cs
+from pathlib import Path
 import numpy as np
 from acados_template import (
     AcadosModel,
@@ -67,6 +68,7 @@ class Controller:
         q_mask=None,
         rdrv_d_mat=None,
         model_name: str = "quad_3d_acados_mpc",
+        acados_codegen_root: str | Path = "/tmp/ros2_quadcopter_acados_codegen",
         solver_options=None,
         enable_integrator: bool = False,
         logger=None,
@@ -86,6 +88,7 @@ class Controller:
         self.dt = self.T / self.N
         self.control_dt = self.dt
         self.substeps = 1
+        self.acados_codegen_root = Path(acados_codegen_root).expanduser().resolve()
         if expected_frequency is not None:
             self.substeps = math.ceil(expected_frequency * self.dt)
             self.control_dt = 1.0 / expected_frequency
@@ -177,7 +180,10 @@ class Controller:
                 else solver_options.get("solver_type", "SQP_RTI")
             )
 
-            json_file = str(f"{key_model.name}_acados_ocp.json")
+            code_export_dir, json_file = self._acados_codegen_paths(
+                key_model.name, "ocp"
+            )
+            ocp.code_gen_opts.code_export_directory = str(code_export_dir)
             self.acados_ocp_solver = AcadosOcpSolver(ocp, json_file=json_file)
 
         self.acados_sim_solver = (
@@ -192,6 +198,16 @@ class Controller:
             self.logger.info(f"Controller steps = {n_nodes}")
             self.logger.info(f"Controller dt = {self.dt}")
             self.logger.info(f"Controller integration dt = {self.control_dt}")
+            self.logger.info(f"acados codegen root = {self.acados_codegen_root}")
+
+    def _acados_codegen_paths(
+        self, model_name: str, solver_kind: str
+    ) -> tuple[Path, str]:
+        solver_dir = self.acados_codegen_root / model_name / solver_kind
+        code_export_dir = solver_dir / f"{model_name}_{solver_kind}_generated_code"
+        code_export_dir.mkdir(parents=True, exist_ok=True)
+        json_file = solver_dir / f"{model_name}_acados_{solver_kind}.json"
+        return code_export_dir, str(json_file)
 
     def create_integrator(self, model: AcadosModel) -> AcadosSimSolver:
         sim = AcadosSim()
@@ -200,7 +216,8 @@ class Controller:
         sim.solver_options.integrator_type = "ERK"
         sim.solver_options.num_stages = 4
         sim.solver_options.num_steps = 1
-        json_file = str(f"{model.name}_acados_sim.json")
+        code_export_dir, json_file = self._acados_codegen_paths(model.name, "sim")
+        sim.code_gen_opts.code_export_directory = str(code_export_dir)
         return AcadosSimSolver(sim, json_file=json_file)
 
     def acados_setup_model(self, nominal, model_name):
