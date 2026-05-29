@@ -190,14 +190,14 @@ def generate_circle_path(
     forward_segment = np.column_stack(
         (
             np.full(points_per_segment, 0, dtype=float),
-            radius * u,
+            radius_m * u,
             np.full(points_per_segment, altitude_m, dtype=float),
         )
     )
     circle_segment = np.column_stack(
         (
-            radius * np.cos(theta),
-            radius * np.sin(theta),
+            radius_m * np.cos(theta),
+            radius_m * np.sin(theta),
             np.full(points_per_segment, altitude_m, dtype=float),
         )
     )
