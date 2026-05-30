@@ -13,9 +13,9 @@ class SinglePointPathPublisher(Node):
         self.declare_parameter("frame_id", "map")
         self.declare_parameter("x", 0.0)
         self.declare_parameter("y", 0.0)
-        self.declare_parameter("z", -0.1)
-        self.declare_parameter("wait_for_subscribers_sec", 5.0)
-        self.declare_parameter("keep_alive_sec", 10.0)
+        self.declare_parameter("z", -0.04)
+        self.declare_parameter("wait_for_subscribers_sec", 0.0)
+        self.declare_parameter("keep_alive_sec", 3.0)
 
         self.path_topic = str(self.get_parameter("path_topic").value)
         self.frame_id = str(self.get_parameter("frame_id").value)

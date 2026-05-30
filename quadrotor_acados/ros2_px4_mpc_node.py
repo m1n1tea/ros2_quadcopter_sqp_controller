@@ -321,6 +321,7 @@ class Px4MpcNode(Node):
 
         cmd = np.clip(np.array(cmd[:4], dtype=float), 0.0, 1.0)
         next_state_xyz = self.controller.integrate_control_step(current_state, cmd)
+        self.get_logger().info(f"Got control = {list(cmd)}")
         self.get_logger().info(f"Predicted next state: {next_state_xyz}")
         if self.command_output_mode == "vehicle_rates_setpoint":
             body_rates_px4 = Controller.xyz_to_ned_vector(next_x[10:13])
