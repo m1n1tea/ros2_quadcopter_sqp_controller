@@ -75,16 +75,17 @@ class Controller:
     ):
         if q_cost is None:
             q_cost = np.array(
-                [10.0, 10.0, 10.0, 2.5, 2.5, 2.5, 0.5, 0.5, 0.5, 0.1, 0.1, 0.1]
+                [10.0, 10.0, 20.0, 2.0, 2.0, 0.8, 0.5, 0.5, 1.0, 0.1, 0.1, 0.03]
             )
         if r_cost is None:
-            r_cost = np.array([0.01, 0.01, 0.01, 0.01])
+            r_cost = np.array([0.03, 0.03, 0.03, 0.03])
 
         self.T = t_horizon
         self.N = n_nodes
         self.quad = quad
         self.max_u = quad.max_input_value
         self.min_u = quad.min_input_value
+        self.hover_u = quad.mass * 9.81 / 4 * self.quad.max_thrust
         self.dt = self.T / self.N
         self.control_dt = self.dt
         self.substeps = 1
@@ -406,10 +407,10 @@ class Controller:
                     0,
                     0,
                     0,
-                    0,
-                    0,
-                    0,
-                    0,
+                    hover_u,
+                    hover_u,
+                    hover_u,
+                    hover_u
                 ]
             )
             self.acados_ocp_solver.set(j, "yref", y_ref)
@@ -441,6 +442,10 @@ class Controller:
         for i in range(self.N):
             w_opt_acados[i, :] = self.acados_ocp_solver.get(i, "u")
             x_opt_acados[i + 1, :] = self.acados_ocp_solver.get(i + 1, "x")
+        if self.logger:
+            self.logger.info(
+                f"Planned state trajectory: {x_opt_acados.tolist()}"
+            )
         w_opt_acados = np.reshape(w_opt_acados, (-1))
 
         return w_opt_acados[:4], x_opt_acados[1]
