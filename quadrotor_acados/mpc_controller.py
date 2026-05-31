@@ -407,10 +407,10 @@ class Controller:
                     0,
                     0,
                     0,
-                    hover_u,
-                    hover_u,
-                    hover_u,
-                    hover_u
+                    self.hover_u,
+                    self.hover_u,
+                    self.hover_u,
+                    self.hover_u
                 ]
             )
             self.acados_ocp_solver.set(j, "yref", y_ref)
