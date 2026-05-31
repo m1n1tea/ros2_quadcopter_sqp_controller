@@ -73,12 +73,14 @@ class Controller:
         enable_integrator: bool = False,
         logger=None,
     ):
-        if q_cost is None:
-            q_cost = np.array(
-                [10.0, 10.0, 20.0, 2.0, 2.0, 0.8, 0.5, 0.5, 1.0, 0.1, 0.1, 0.03]
-            )
-        if r_cost is None:
-            r_cost = np.array([0.03, 0.03, 0.03, 0.03])
+        if q_cost is None or r_cost is None:
+            raise ValueError("q_cost and r_cost must be provided")
+        q_cost = np.asarray(q_cost, dtype=float)
+        r_cost = np.asarray(r_cost, dtype=float)
+        if q_cost.shape != (12,):
+            raise ValueError(f"q_cost must contain 12 weights, got shape {q_cost.shape}")
+        if r_cost.shape != (4,):
+            raise ValueError(f"r_cost must contain 4 weights, got shape {r_cost.shape}")
 
         self.T = t_horizon
         self.N = n_nodes
@@ -98,6 +100,7 @@ class Controller:
         self.q = cs.MX.sym("a", 4)
         self.v = cs.MX.sym("v", 3)
         self.r = cs.MX.sym("r", 3)
+        self.preferred_step = None
 
         self.x = cs.vertcat(self.p, self.q, self.v, self.r)
         self.state_dim = 13
@@ -311,8 +314,9 @@ class Controller:
         if preferred_speed is None:
             self.time_traj = traj
         else:
+            self.preferred_step = preferred_speed * self.T / self.N / self.substeps
             self.time_traj = transform_trajectory(
-                traj, preferred_speed * self.T / self.N / self.substeps
+                traj, self.preferred_step
             )
 
         self.time_traj[:, :3] = np.array(
@@ -372,11 +376,18 @@ class Controller:
             )
             + self.last_closest_index
         )
-
-        local_trajectory = []
+        starting_trajectory = [x_init[:3], self.time_traj[starting_index]]
+        
+        if self.preferred_step is not None:
+            starting_trajectory = transform_trajectory(
+                    starting_trajectory, self.preferred_step
+                )
+        
+        full_trajectory = np.vstack((starting_trajectory, self.time_traj[starting_index + 1 : starting_index + self.N * self.substeps]))
         used_substeps = self.substeps
+        local_trajectory = []
         while (len(local_trajectory) < self.N + 1) and (used_substeps * 2 > self.substeps):
-            local_trajectory = self.time_traj[starting_index : starting_index + self.N * used_substeps + 1 : used_substeps]
+            local_trajectory = full_trajectory[:self.N * used_substeps + 1 : used_substeps]
             used_substeps -= 1
         used_substeps += 1
 

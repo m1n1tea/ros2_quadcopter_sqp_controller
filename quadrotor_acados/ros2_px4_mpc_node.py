@@ -49,6 +49,8 @@ class Px4MpcNode(Node):
         self.preferred_speed = float(self.get_parameter("preferred_speed").value)
         horizon_sec = float(self.get_parameter("horizon_sec").value)
         horizon_nodes = int(self.get_parameter("horizon_nodes").value)
+        q_cost = np.asarray(self.get_parameter("q_cost").value, dtype=float)
+        r_cost = np.asarray(self.get_parameter("r_cost").value, dtype=float)
         self.min_thrust = 0
         self.max_thrust = 1
         if self.command_output_mode not in (
@@ -88,6 +90,8 @@ class Px4MpcNode(Node):
                 quad=self.quad,
                 t_horizon=horizon_sec,
                 n_nodes=horizon_nodes,
+                q_cost=q_cost,
+                r_cost=r_cost,
                 logger=self.get_logger(),
                 expected_frequency=self.control_rate_hz,
                 enable_integrator=True,
