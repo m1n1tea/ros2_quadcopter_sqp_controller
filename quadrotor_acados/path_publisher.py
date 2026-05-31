@@ -15,8 +15,8 @@ class PathPublisher(Node):
         self.declare_parameter("path_topic", "/reference_path")
         self.declare_parameter("frame_id", "map")
         self.declare_parameter("points_file", "")
-        self.declare_parameter("wait_for_subscribers_sec", 0.0)
-        self.declare_parameter("keep_alive_sec", 3.0)
+        self.declare_parameter("wait_for_subscribers_sec", 0.5)
+        self.declare_parameter("keep_alive_sec", 1.0)
 
         self.path_topic = str(self.get_parameter("path_topic").value)
         self.frame_id = str(self.get_parameter("frame_id").value)
