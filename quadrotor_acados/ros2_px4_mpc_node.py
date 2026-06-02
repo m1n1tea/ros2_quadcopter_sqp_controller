@@ -47,6 +47,9 @@ class Px4MpcNode(Node):
             self.get_parameter("offboard_control_rate_hz").value
         )
         self.preferred_speed = float(self.get_parameter("preferred_speed").value)
+        self.estimate_z_velocity_from_position = bool(
+            self._get_param("estimate_z_velocity_from_position", False)
+        )
         horizon_sec = float(self.get_parameter("horizon_sec").value)
         horizon_nodes = int(self.get_parameter("horizon_nodes").value)
         q_cost = np.asarray(self.get_parameter("q_cost").value, dtype=float)
@@ -83,6 +86,8 @@ class Px4MpcNode(Node):
         self.last_state_log_time_sec = -1.0
         self.last_body_rates = np.zeros(3, dtype=float)
         self.last_thrust = 0.0
+        self.last_z_position = None
+        self.last_z_position_time_sec = None
 
         try:
             self.quad = load_params(self)
@@ -154,7 +159,8 @@ class Px4MpcNode(Node):
             f"output_mode={self.command_output_mode}, actuator={self.actuator_topic}, "
             f"vehicle_rates_setpoint={self.vehicle_rates_setpoint_topic}, "
             f"offboard_control_mode={self.offboard_control_mode_topic}, "
-            f"vehicle_command={self.vehicle_command_topic}"
+            f"vehicle_command={self.vehicle_command_topic}, "
+            f"estimate_z_velocity_from_position={self.estimate_z_velocity_from_position}"
         )
 
     def _get_param(self, name: str, default):
@@ -191,18 +197,45 @@ class Px4MpcNode(Node):
         velocity = np.array(
             [msg.velocity[0], msg.velocity[1], msg.velocity[2]], dtype=float
         )
+        if self.estimate_z_velocity_from_position:
+            velocity[2] = self.estimate_z_velocity(msg, position[2], velocity[2])
         angular_velocity = np.array(
             [msg.angular_velocity[0], msg.angular_velocity[1], msg.angular_velocity[2]],
             dtype=float,
         )
 
         state = np.concatenate([position, quat, velocity, angular_velocity])
+        if self.arm_sequence_sent:
+            self.get_logger().info(f"Updated state = {state}")
 
         with self.lock:
             self.current_state = state
             self.state_update_seq += 1
-        if self.arm_sequence_sent:
-            self.get_logger().info(f"Updated state = {state}")
+
+    def estimate_z_velocity(
+        self, msg: VehicleOdometry, z_position: float, fallback_velocity: float
+    ) -> float:
+        timestamp_sec = self.get_odometry_time_sec(msg)
+        if self.last_z_position is None or self.last_z_position_time_sec is None:
+            self.last_z_position = z_position
+            self.last_z_position_time_sec = timestamp_sec
+            return float(fallback_velocity)
+
+        dt = timestamp_sec - self.last_z_position_time_sec
+        if dt <= 0.0:
+            return float(fallback_velocity)
+
+        z_velocity = (z_position - self.last_z_position) / dt
+        self.last_z_position = z_position
+        self.last_z_position_time_sec = timestamp_sec
+        return float(z_velocity)
+
+    def get_odometry_time_sec(self, msg: VehicleOdometry) -> float:
+        if hasattr(msg, "timestamp") and msg.timestamp:
+            return float(msg.timestamp) * 1e-6
+        if hasattr(msg, "timestamp_sample") and msg.timestamp_sample:
+            return float(msg.timestamp_sample) * 1e-6
+        return float(self.get_clock().now().nanoseconds) * 1e-9
 
     def vehicle_status_callback(self, msg: VehicleStatus) -> None:
         if not hasattr(msg, "arming_state"):

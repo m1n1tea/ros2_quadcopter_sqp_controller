@@ -11,6 +11,7 @@ px4_mpc_node:
     control_rate_hz: 200.0
     offboard_control_rate_hz: 10.0
     preferred_speed: 1.0
+    estimate_z_velocity_from_position: true
     horizon_sec: 2.0
     horizon_nodes: 40
     q_cost: [10.0, 10.0, 20.0, 2.0, 2.0, 0.8, 1.0, 1.0, 2.0, 0.1, 0.1, 0.03]

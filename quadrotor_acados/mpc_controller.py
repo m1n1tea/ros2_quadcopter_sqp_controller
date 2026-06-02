@@ -446,9 +446,6 @@ class Controller:
         self.acados_ocp_solver.set(self.N, "yref", y_refN)
 
         self.acados_ocp_solver.solve()
-        self.logger.info(
-            f"Last ref state: {y_refN}"
-        )
 
         w_opt_acados = np.ndarray((self.N, 4))
         x_opt_acados = np.ndarray((self.N + 1, len(x_init)))
