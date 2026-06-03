@@ -74,10 +74,20 @@ class Controller:
         norm = np.linalg.norm(quat_arr)
         if norm == 0.0:
             return np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
-        quat_arr = quat_arr / norm
-        if quat_arr[0] < 0.0:
-            quat_arr *= -1.0
-        return quat_arr
+        return quat_arr / norm
+
+    @staticmethod
+    def make_quat_sequence_continuous(quats: np.ndarray) -> np.ndarray:
+        continuous = np.array(quats, dtype=float, copy=True)
+        if len(continuous) == 0:
+            return continuous
+
+        continuous[0] = Controller.normalize_quat(continuous[0])
+        for idx in range(1, len(continuous)):
+            continuous[idx] = Controller.normalize_quat(continuous[idx])
+            if np.dot(continuous[idx - 1], continuous[idx]) < 0.0:
+                continuous[idx] *= -1.0
+        return continuous
 
     @staticmethod
     def slerp_quat(q0: np.ndarray, q1: np.ndarray, t: float) -> np.ndarray:
@@ -369,6 +379,9 @@ class Controller:
             self.time_traj[:, 3:7] = np.array(
                 [self.ned_to_xyz_quat(quat) for quat in self.time_traj[:, 3:7]]
             )
+            self.time_traj[:, 3:7] = self.make_quat_sequence_continuous(
+                self.time_traj[:, 3:7]
+            )
         if self.time_traj.shape[1] >= 10:
             self.time_traj[:, 7:10] = np.array(
                 [self.ned_to_xyz_vector(vel) for vel in self.time_traj[:, 7:10]]
@@ -490,9 +503,6 @@ class Controller:
 
         x_init = self.state_ned_to_xyz(initial_state)
 
-        self.acados_ocp_solver.set(0, "lbx", x_init)
-        self.acados_ocp_solver.set(0, "ubx", x_init)
-
         starting_index = (
             np.argmin(
                 np.sum(
@@ -502,6 +512,10 @@ class Controller:
             )
             + self.last_closest_index
         )
+
+        if np.dot(x_init[3:7], self.time_traj[starting_index, 3:7]) < 0.0:
+            x_init[3:7] *= -1.0
+
         starting_row = self.time_traj[starting_index].copy()
         starting_row[:3] = x_init[:3]
         if len(starting_row) >= 7:
@@ -510,31 +524,19 @@ class Controller:
             starting_row[7:10] = x_init[7:10]
         if len(starting_row) >= 13:
             starting_row[10:13] = x_init[10:13]
-        starting_trajectory = np.vstack(
-            [starting_row, self.time_traj[starting_index]]
-        )
-
+        
+        starting_trajectory = np.vstack([starting_row, self.time_traj[starting_index]])
+        
         if self.preferred_step is not None:
             starting_trajectory = self._resample_reference_trajectory(
                 starting_trajectory, self.preferred_step
             )
-
-        full_trajectory = np.vstack(
-            (
-                starting_trajectory,
-                self.time_traj[
-                    starting_index + 1 : starting_index + self.N * self.substeps
-                ],
-            )
-        )
+        
+        full_trajectory = np.vstack((starting_trajectory, self.time_traj[starting_index + 1 : starting_index + self.N * self.substeps]))
         used_substeps = self.substeps
         local_trajectory = []
-        while (len(local_trajectory) < self.N + 1) and (
-            used_substeps * 2 > self.substeps
-        ):
-            local_trajectory = full_trajectory[
-                : self.N * used_substeps + 1 : used_substeps
-            ]
+        while (len(local_trajectory) < self.N + 1) and (used_substeps * 2 > self.substeps):
+            local_trajectory = full_trajectory[:self.N * used_substeps + 1 : used_substeps]
             used_substeps -= 1
         used_substeps += 1
 
@@ -548,6 +550,9 @@ class Controller:
             )
             local_trajectory = np.vstack([local_trajectory, pad_rows])
         self.last_closest_index = starting_index
+
+        self.acados_ocp_solver.set(0, "lbx", x_init)
+        self.acados_ocp_solver.set(0, "ubx", x_init)
 
         for j in range(self.N):
             y_ref = np.concatenate(
