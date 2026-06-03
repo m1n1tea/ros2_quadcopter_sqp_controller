@@ -1,3 +1,5 @@
+import math
+
 import rclpy
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path
@@ -14,6 +16,7 @@ class SinglePointPathPublisher(Node):
         self.declare_parameter("x", 0.0)
         self.declare_parameter("y", 0.0)
         self.declare_parameter("z", -0.04)
+        self.declare_parameter("yaw", 0.0)
         self.declare_parameter("wait_for_subscribers_sec", 0.5)
         self.declare_parameter("keep_alive_sec", 1.0)
 
@@ -24,6 +27,7 @@ class SinglePointPathPublisher(Node):
             float(self.get_parameter("y").value),
             float(self.get_parameter("z").value),
         )
+        self.yaw = float(self.get_parameter("yaw").value)
         self.wait_for_subscribers_sec = float(
             self.get_parameter("wait_for_subscribers_sec").value
         )
@@ -42,7 +46,8 @@ class SinglePointPathPublisher(Node):
         self.path_msg = self._build_path_message()
 
         self.get_logger().info(
-            f"Prepared single-point reference for {self.path_topic}: {self.point}"
+            f"Prepared single-point reference for {self.path_topic}: "
+            f"position={self.point}, yaw={self.yaw}"
         )
 
     def _build_path_message(self) -> Path:
@@ -54,7 +59,9 @@ class SinglePointPathPublisher(Node):
         pose.pose.position.x = self.point[0]
         pose.pose.position.y = self.point[1]
         pose.pose.position.z = self.point[2]
-        pose.pose.orientation.w = 1.0
+        half_yaw = 0.5 * self.yaw
+        pose.pose.orientation.z = math.sin(half_yaw)
+        pose.pose.orientation.w = math.cos(half_yaw)
         msg.poses.append(pose)
 
         return msg
@@ -64,7 +71,9 @@ class SinglePointPathPublisher(Node):
         self.path_msg.header.stamp = now
         self.path_msg.poses[0].header.stamp = now
         self.publisher.publish(self.path_msg)
-        self.get_logger().info(f"Single-point reference published: {self.point}")
+        self.get_logger().info(
+            f"Single-point reference published: position={self.point}, yaw={self.yaw}"
+        )
 
     def wait_for_subscribers(self) -> None:
         if self.wait_for_subscribers_sec <= 0.0:

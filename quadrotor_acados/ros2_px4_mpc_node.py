@@ -172,16 +172,35 @@ class Px4MpcNode(Node):
         if not msg.poses:
             return
 
-        trajectory = np.array(
-            [
-                [pose.pose.position.x, pose.pose.position.y, pose.pose.position.z]
-                for pose in msg.poses
-            ],
-            dtype=float,
-        )
+        waypoints = []
+        for pose in msg.poses:
+            quat = np.array(
+                [
+                    pose.pose.orientation.w,
+                    pose.pose.orientation.x,
+                    pose.pose.orientation.y,
+                    pose.pose.orientation.z,
+                ],
+                dtype=float,
+            )
+            if np.linalg.norm(quat) == 0.0:
+                quat = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
+            waypoints.append(
+                [
+                    pose.pose.position.x,
+                    pose.pose.position.y,
+                    pose.pose.position.z,
+                    quat[0],
+                    quat[1],
+                    quat[2],
+                    quat[3],
+                ]
+            )
+
+        trajectory = np.array(waypoints, dtype=float)
 
         with self.lock:
-            self.final_reference_point = trajectory[-1].copy()
+            self.final_reference_point = trajectory[-1, :3].copy()
             self.final_point_reached_logged = False
             self.controller.update_trajectory(
                 trajectory, preferred_speed=self.preferred_speed

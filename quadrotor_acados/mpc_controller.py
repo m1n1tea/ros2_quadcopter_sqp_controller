@@ -13,7 +13,6 @@ from pyquaternion import Quaternion
 from .math_utils import (
     quaternion_inverse,
     skew_symmetric,
-    transform_trajectory,
     v_dot_q,
 )
 from .quadrotor_model import QuadrotorParams
@@ -56,6 +55,49 @@ class Controller:
             Controller.FRAME_TRANSFORM @ rotmat_ned @ Controller.FRAME_TRANSFORM.T
         )
         return Controller.rotmat_to_quat(rotmat_xyz)
+
+    @staticmethod
+    def yaw_to_quat(yaw: np.ndarray) -> np.ndarray:
+        yaw = np.asarray(yaw, dtype=float)
+        return np.column_stack(
+            (
+                np.cos(0.5 * yaw),
+                np.zeros_like(yaw),
+                np.zeros_like(yaw),
+                np.sin(0.5 * yaw),
+            )
+        )
+
+    @staticmethod
+    def normalize_quat(quat: np.ndarray) -> np.ndarray:
+        quat_arr = np.asarray(quat, dtype=float)
+        norm = np.linalg.norm(quat_arr)
+        if norm == 0.0:
+            return np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
+        quat_arr = quat_arr / norm
+        if quat_arr[0] < 0.0:
+            quat_arr *= -1.0
+        return quat_arr
+
+    @staticmethod
+    def slerp_quat(q0: np.ndarray, q1: np.ndarray, t: float) -> np.ndarray:
+        q0 = Controller.normalize_quat(q0)
+        q1 = Controller.normalize_quat(q1)
+        dot = float(np.dot(q0, q1))
+        if dot < 0.0:
+            q1 = -q1
+            dot = -dot
+        dot = np.clip(dot, -1.0, 1.0)
+        if dot > 0.9995:
+            return Controller.normalize_quat(q0 + t * (q1 - q0))
+
+        theta_0 = np.arccos(dot)
+        sin_theta_0 = np.sin(theta_0)
+        theta = theta_0 * t
+        return (
+            np.sin(theta_0 - theta) / sin_theta_0 * q0
+            + np.sin(theta) / sin_theta_0 * q1
+        )
 
     def __init__(
         self,
@@ -310,12 +352,13 @@ class Controller:
     def update_trajectory(
         self, trajectory: np.ndarray, preferred_speed: float | None = None
     ):
-        traj = np.array(trajectory, dtype=float, copy=True)
+        traj = self._normalize_reference_trajectory(trajectory)
         if preferred_speed is None:
+            self.preferred_step = None
             self.time_traj = traj
         else:
             self.preferred_step = preferred_speed * self.T / self.N / self.substeps
-            self.time_traj = transform_trajectory(
+            self.time_traj = self._resample_reference_trajectory(
                 traj, self.preferred_step
             )
 
@@ -337,6 +380,89 @@ class Controller:
 
         # self.logger.info(f"Got new trajectory = {self.time_traj}")
         self.last_closest_index = 0
+
+    def _normalize_reference_trajectory(self, trajectory: np.ndarray) -> np.ndarray:
+        traj = np.array(trajectory, dtype=float, copy=True)
+        if traj.ndim == 1:
+            traj = traj.reshape(1, -1)
+        if traj.ndim != 2 or traj.shape[1] < 3:
+            raise ValueError(
+                f"Trajectory must be Nx3 or wider, got shape {traj.shape}."
+            )
+        if traj.shape[1] == 4:
+            traj = np.column_stack((traj[:, :3], self.yaw_to_quat(traj[:, 3])))
+        elif 4 < traj.shape[1] < 7:
+            raise ValueError(
+                "Trajectory with attitude must use Nx4 xyz+yaw or Nx7 xyz+quaternion."
+            )
+        return traj
+
+    def _resample_reference_trajectory(
+        self, traj: np.ndarray, preferred_step: float
+    ) -> np.ndarray:
+        if len(traj) < 2 or preferred_step <= 0.0:
+            return np.array(traj, dtype=float, copy=True)
+
+        segment_lengths = np.linalg.norm(np.diff(traj[:, :3], axis=0), axis=1)
+        total_length = float(np.sum(segment_lengths))
+        if total_length <= 1e-9:
+            return np.array(traj, dtype=float, copy=True)
+
+        cumulative = np.concatenate(([0.0], np.cumsum(segment_lengths)))
+        sample_distances = np.arange(0.0, total_length, preferred_step)
+        if len(sample_distances) == 0 or not np.isclose(
+            sample_distances[-1], total_length
+        ):
+            sample_distances = np.append(sample_distances, total_length)
+
+        rows = [
+            self._interpolate_reference_row(traj, cumulative, segment_lengths, distance)
+            for distance in sample_distances
+        ]
+        return np.vstack(rows)
+
+    def _interpolate_reference_row(
+        self,
+        traj: np.ndarray,
+        cumulative: np.ndarray,
+        segment_lengths: np.ndarray,
+        distance: float,
+    ) -> np.ndarray:
+        if distance >= cumulative[-1]:
+            return traj[-1].copy()
+
+        segment_idx = max(0, np.searchsorted(cumulative, distance, side="right") - 1)
+        while (
+            segment_idx < len(segment_lengths) - 1
+            and segment_lengths[segment_idx] <= 1e-9
+        ):
+            segment_idx += 1
+
+        segment_length = segment_lengths[segment_idx]
+        if segment_length <= 1e-9:
+            return traj[segment_idx].copy()
+
+        t = (distance - cumulative[segment_idx]) / segment_length
+        start = traj[segment_idx]
+        end = traj[segment_idx + 1]
+        row = start + t * (end - start)
+        row[:3] = start[:3] + t * (end[:3] - start[:3])
+        if traj.shape[1] >= 7:
+            row[3:7] = self.slerp_quat(start[3:7], end[3:7], float(t))
+        return row
+
+    def _reference_state_from_point(self, point: np.ndarray) -> np.ndarray:
+        reference = np.zeros(13, dtype=float)
+        reference[:3] = point[:3]
+        if len(point) >= 7:
+            reference[3:7] = self.normalize_quat(point[3:7])
+        else:
+            reference[3] = 1.0
+        if len(point) >= 10:
+            reference[7:10] = point[7:10]
+        if len(point) >= 13:
+            reference[10:13] = point[10:13]
+        return reference
 
     def state_ned_to_xyz(self, state: np.ndarray) -> np.ndarray:
         xyz_state = np.array(state, dtype=float, copy=True)
@@ -370,24 +496,45 @@ class Controller:
         starting_index = (
             np.argmin(
                 np.sum(
-                    (self.time_traj[self.last_closest_index :] - x_init[:3]) ** 2,
+                    (self.time_traj[self.last_closest_index :, :3] - x_init[:3]) ** 2,
                     axis=1,
                 )
             )
             + self.last_closest_index
         )
-        starting_trajectory = [x_init[:3], self.time_traj[starting_index]]
-        
+        starting_row = self.time_traj[starting_index].copy()
+        starting_row[:3] = x_init[:3]
+        if len(starting_row) >= 7:
+            starting_row[3:7] = x_init[3:7]
+        if len(starting_row) >= 10:
+            starting_row[7:10] = x_init[7:10]
+        if len(starting_row) >= 13:
+            starting_row[10:13] = x_init[10:13]
+        starting_trajectory = np.vstack(
+            [starting_row, self.time_traj[starting_index]]
+        )
+
         if self.preferred_step is not None:
-            starting_trajectory = transform_trajectory(
-                    starting_trajectory, self.preferred_step
-                )
-        
-        full_trajectory = np.vstack((starting_trajectory, self.time_traj[starting_index + 1 : starting_index + self.N * self.substeps]))
+            starting_trajectory = self._resample_reference_trajectory(
+                starting_trajectory, self.preferred_step
+            )
+
+        full_trajectory = np.vstack(
+            (
+                starting_trajectory,
+                self.time_traj[
+                    starting_index + 1 : starting_index + self.N * self.substeps
+                ],
+            )
+        )
         used_substeps = self.substeps
         local_trajectory = []
-        while (len(local_trajectory) < self.N + 1) and (used_substeps * 2 > self.substeps):
-            local_trajectory = full_trajectory[:self.N * used_substeps + 1 : used_substeps]
+        while (len(local_trajectory) < self.N + 1) and (
+            used_substeps * 2 > self.substeps
+        ):
+            local_trajectory = full_trajectory[
+                : self.N * used_substeps + 1 : used_substeps
+            ]
             used_substeps -= 1
         used_substeps += 1
 
@@ -403,46 +550,18 @@ class Controller:
         self.last_closest_index = starting_index
 
         for j in range(self.N):
-            y_ref = np.array(
-                [
-                    local_trajectory[j, 0],
-                    local_trajectory[j, 1],
-                    local_trajectory[j, 2],
-                    1,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    self.hover_u,
-                    self.hover_u,
-                    self.hover_u,
-                    self.hover_u
-                ]
+            y_ref = np.concatenate(
+                (
+                    self._reference_state_from_point(local_trajectory[j]),
+                    np.array(
+                        [self.hover_u, self.hover_u, self.hover_u, self.hover_u],
+                        dtype=float,
+                    ),
+                )
             )
             self.acados_ocp_solver.set(j, "yref", y_ref)
 
-        y_refN = np.array(
-            [
-                local_trajectory[self.N, 0],
-                local_trajectory[self.N, 1],
-                local_trajectory[self.N, 2],
-                1,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-            ]
-        )
+        y_refN = self._reference_state_from_point(local_trajectory[self.N])
         self.acados_ocp_solver.set(self.N, "yref", y_refN)
 
         self.acados_ocp_solver.solve()

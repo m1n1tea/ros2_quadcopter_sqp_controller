@@ -13,9 +13,9 @@ px4_mpc_node:
     preferred_speed: 1.0
     estimate_z_velocity_from_position: true
     horizon_sec: 2.0
-    horizon_nodes: 40
-    q_cost: [10.0, 10.0, 20.0, 2.0, 2.0, 0.8, 1.0, 1.0, 2.0, 0.1, 0.1, 0.03]
-    r_cost: [0.03, 0.03, 0.03, 0.03]
+    horizon_nodes: 30
+    q_cost: [30.0, 30.0, 40.0, 2.0, 2.0, 0.8, 0.4, 0.4, 1.0, 0.1, 0.1, 0.03]
+    r_cost: [0.01, 0.01, 0.01, 0.01]
     uav:
       name: x500
       parameters:
