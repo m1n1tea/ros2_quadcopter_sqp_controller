@@ -1,3 +1,4 @@
+import math
 from pathlib import Path as FilePath
 
 import numpy as np
@@ -50,15 +51,21 @@ class PathPublisher(Node):
         msg = Path()
         msg.header.frame_id = self.frame_id
         self.get_logger().info("Building path:")
-        for x, y, z in points:
+        for point in points:
+            x, y, z = point[:3]
             pose = PoseStamped()
             pose.header.frame_id = self.frame_id
             pose.pose.position.x = float(x)
             pose.pose.position.y = float(y)
             pose.pose.position.z = float(z)
-            pose.pose.orientation.w = 1.0
+            if len(point) >= 4:
+                half_yaw = 0.5 * point[3]
+                pose.pose.orientation.z = math.sin(half_yaw)
+                pose.pose.orientation.w = math.cos(half_yaw)
+            else:
+                pose.pose.orientation.w = 1.0
             msg.poses.append(pose)
-            self.get_logger().info(f"{(x, y, z)}")
+            self.get_logger().info(f"{tuple(point)}")
         return msg
 
     def _load_points_file(self) -> np.ndarray:
@@ -75,8 +82,10 @@ class PathPublisher(Node):
 
     def _normalize_points(self, points: np.ndarray) -> np.ndarray:
         points = np.asarray(points, dtype=float)
-        if points.ndim != 2 or points.shape[1] != 3:
-            raise ValueError(f"Trajectory points must be Nx3, got shape {points.shape}.")
+        if points.ndim != 2 or points.shape[1] not in (3, 4):
+            raise ValueError(
+                f"Trajectory points must be Nx3 or Nx4 xyz+yaw, got shape {points.shape}."
+            )
         if len(points) < 2:
             raise ValueError("Trajectory must contain at least two points.")
         return points

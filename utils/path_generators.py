@@ -179,12 +179,15 @@ def generate_circle_path(
 
     u = np.linspace(0.0, 1.0, points_per_segment)
     theta = 2.0 * math.pi * turns * u
+    tangent_yaw = theta + 0.5 * math.pi
+    start_yaw = tangent_yaw[0]
 
     up_segment = np.column_stack(
         (
             np.zeros(points_per_segment, dtype=float),
             np.zeros(points_per_segment, dtype=float),
             altitude_m * u,
+            np.full(points_per_segment, start_yaw, dtype=float),
         )
     )
     forward_segment = np.column_stack(
@@ -192,6 +195,7 @@ def generate_circle_path(
             radius_m * u,
             np.full(points_per_segment, 0, dtype=float),
             np.full(points_per_segment, altitude_m, dtype=float),
+            np.full(points_per_segment, start_yaw, dtype=float),
         )
     )
     circle_segment = np.column_stack(
@@ -199,6 +203,7 @@ def generate_circle_path(
             radius_m * np.cos(theta),
             radius_m * np.sin(theta),
             np.full(points_per_segment, altitude_m, dtype=float),
+            tangent_yaw,
         )
     )
 
