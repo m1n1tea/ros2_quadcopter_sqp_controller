@@ -1,6 +1,7 @@
 px4_mpc_node:
   ros__parameters:
-    path_topic: /reference_path
+    target_topic: /target/odometry
+    target_radius: 1.0
     odometry_topic: /fmu/out/vehicle_odometry
     vehicle_status_topic: /fmu/out/vehicle_status
     command_output_mode: actuator_motors # actuator_motors or vehicle_rates_setpoint
@@ -10,13 +11,18 @@ px4_mpc_node:
     vehicle_command_topic: /fmu/in/vehicle_command
     control_rate_hz: 200.0
     offboard_control_rate_hz: 10.0
-    preferred_speed: 1.0
     horizon_sec: 2.0
-    horizon_nodes: 30
-    q_cost: [30.0, 30.0, 40.0, 2.0, 2.0, 0.8, 0.4, 0.4, 1.0, 0.1, 0.1, 0.03]
+    horizon_nodes: 15
+    max_body_rate: [3.0, 3.0, 2.0] # FRD roll/pitch/yaw, rad/s
+    q_cost: [20.0, 20.0, 4.0, 0.3, 0.3, 0.1] # attitude xyz, body rates
     r_cost: [0.01, 0.01, 0.01, 0.01]
     estimate_z_velocity_from_position: false
     use_normalized_rotor_speed: true
+    preferred_common_thrust: -1.0 # negative selects calculated hover thrust
+    distance_thrust_gain: 0.01 # directional common-thrust gain per meter
+    min_common_thrust: 0.0
+    max_common_thrust: 1.0
+    max_tilt_deg: 35.0
     uav:
       name: x500
       parameters:

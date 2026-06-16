@@ -1,9 +1,10 @@
-# Quadrotor Formation using Model Predictive Control
+# Quadrotor Moving-Target Interception using Model Predictive Control
 
 ## ROS 2 PX4 MPC Node
 This repository now includes a ROS 2 package `quadrotor_acados` that:
-- subscribes to `nav_msgs/msg/Path` (reference trajectory),
-- subscribes to `px4_msgs/msg/VehicleOdometry` (current state),
+- subscribes to `nav_msgs/msg/Odometry` for target direction/range observations,
+- uses only attitude quaternion and angular velocity from
+  `px4_msgs/msg/VehicleOdometry`,
 - publishes `px4_msgs/msg/ActuatorMotors` by default, or
   `px4_msgs/msg/VehicleRatesSetpoint` when configured.
 
@@ -11,18 +12,94 @@ The launch file uses `quadrotor_acados/config/x500.yaml` by default.
 
 Build and run:
 ```bash
+source /opt/ros/kilted/setup.bash
 colcon build --packages-select quadrotor_acados
 source install/setup.bash
 ros2 launch quadrotor_acados launch_mpc.py
 ```
 
+If the workspace was moved between the devcontainer and host, rebuild generated
+dependencies in the current path before rebuilding the controller:
+```bash
+source /opt/ros/kilted/setup.bash
+rm -rf build/px4_msgs install/px4_msgs build/quadrotor_acados
+colcon build --packages-select px4_msgs quadrotor_acados
+```
+
 ### Python dependencies
 Install pip dependencies from `requirements.txt`:
 ```bash
-pip install -r requirements.txt
+python3 -m pip install --upgrade pip setuptools wheel Cython
+python3 -m pip install -r requirements.txt
+```
+
+To repair an existing activated venv before building ROS message
+packages:
+```bash
+python -m pip install catkin_pkg "empy==3.3.4" lark
+```
+
+If the virtual environment is located inside the ROS 2 workspace, keep a
+`COLCON_IGNORE` marker at its root so colcon does not scan Python packages:
+```bash
+touch venv_acados/COLCON_IGNORE
 ```
 
 Topic names and node runtime parameters are defined in `quadrotor_acados/config/x500.yaml`.
+The MPC state is `[quaternion, body_rates]`; position and linear velocity do not
+enter the optimizer. `max_body_rate` configures hard FRD roll, pitch, and yaw
+rate limits in `rad/s`.
+
+The target observation uses `nav_msgs/msg/Odometry` as a transport:
+- `pose.pose.position`: unit target direction in the PX4 NED world frame.
+- `twist.twist.linear.x`: range in meters, or `NaN` when range is unavailable.
+
+The node converts target direction and collective thrust into a desired
+attitude. It points yaw toward the target and tilts toward it while reserving
+enough vertical thrust to compensate gravity. `max_tilt_deg` caps this tilt.
+`preferred_common_thrust` is the baseline per-motor command; a negative value
+selects calculated hover thrust. When range is available, the command is
+adjusted by range and direction: horizontal or upward targets increase thrust,
+while downward targets reduce it. The result is clipped to
+`min_common_thrust`/`max_common_thrust`.
+
+### Target topic examples
+
+Publish a target direction north and slightly upward, without range:
+```bash
+ros2 topic pub --once --qos-reliability reliable --qos-durability transient_local \
+  /target/odometry nav_msgs/msg/Odometry \
+  "{pose: {pose: {position: {x: 0.9285, y: 0.0, z: -0.3714}}}, \
+    twist: {twist: {linear: {x: .nan}}}}"
+```
+
+The debug publisher computes a moving world target, listens to vehicle
+odometry, and publishes a noisy relative observation. Run it directly:
+```bash
+ros2 run quadrotor_acados moving_target_publisher --ros-args \
+  -p x:=30.0 -p y:=0.0 -p z:=-5.0 \
+  -p vx:=0.0 -p vy:=2.5 -p vz:=0.25 \
+  -p direction_noise_std:=0.02 \
+  -p publish_distance:=true -p distance_noise_std:=0.25 \
+  -p random_seed:=7
+```
+
+`direction_noise_std` is Gaussian noise added independently to the three
+direction components before renormalization. Set `publish_distance:=false` to
+test direction-only control. Set `log_interval_sec:=0.0` to disable logs.
+
+Plot the vehicle and target trajectories and mark collision events:
+```bash
+python3 utils/analyze_target_tracking_log.py \
+  --log ros2_log_mpc \
+  --target-log ros2_log_target \
+  --save-plot target_tracking.png
+```
+
+Omit `--target-log` when the MPC log contains `Received target observation`
+messages. The first collision is shown as a red star; later collisions are
+shown as orange crosses.
+
 Set `command_output_mode: vehicle_rates_setpoint` to publish body-rate/thrust
 setpoints on `vehicle_rates_setpoint_topic` instead of direct motor commands.
 The node transforms the internally optimized body rates back to PX4 NED/FRD
@@ -43,8 +120,9 @@ testing.
 ros2 run quadrotor_acados px4_motor_sequence_node --ros-args -p base_value:=0.1
 ```
 
-## Sample Trajectory Publisher
-The package includes a ROS 2 node that publishes an Nx3 `.npy` reference trajectory as `nav_msgs/msg/Path`.
+## Legacy Trajectory Publishers
+The path publisher utilities remain available for experiments with the separate
+PID node, but `px4_mpc_node` no longer subscribes to `nav_msgs/msg/Path`.
 
 Generate the built-in sample trajectories as `.npy` files:
 ```bash
@@ -105,6 +183,7 @@ make install -j4
 Install acados_template Python package:
 ```
 cd acados
+python3 -m pip install --upgrade setuptools wheel Cython
 pip install -e interfaces/acados_template
 ```
 ***Note:*** The ```<acados_root>``` is the full path from ```/home/```.

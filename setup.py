@@ -28,7 +28,7 @@ setup(
     zip_safe=True,
     maintainer="quadrotor_acados",
     maintainer_email="maintainer@example.com",
-    description="ROS 2 PX4 MPC bridge for quadrotor control",
+    description="ROS 2 PX4 MPC controller for observed-target interception",
     license="MIT",
     tests_require=["pytest"],
     entry_points={
@@ -37,6 +37,8 @@ setup(
             "px4_pid_node = quadrotor_acados.ros2_px4_pid_node:main",
             "px4_motor_sequence_node = quadrotor_acados.ros2_px4_motor_sequence_node:main",
             "path_publisher = quadrotor_acados.path_publisher:main",
+            "moving_target_publisher = "
+            "quadrotor_acados.moving_target_publisher:main",
             "single_point_path_publisher = "
             "quadrotor_acados.single_point_path_publisher:main",
         ],

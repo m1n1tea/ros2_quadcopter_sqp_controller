@@ -10,11 +10,7 @@ from acados_template import (
 )
 from pyquaternion import Quaternion
 
-from .math_utils import (
-    quaternion_inverse,
-    skew_symmetric,
-    v_dot_q,
-)
+from .math_utils import skew_symmetric
 from .quadrotor_model import QuadrotorParams
 import math
 
@@ -115,6 +111,7 @@ class Controller:
         t_horizon = 1.0,
         n_nodes = 10,
         expected_frequency = None,
+        max_body_rate=None,
         q_cost=None,
         r_cost=None,
         q_mask=None,
@@ -129,10 +126,13 @@ class Controller:
             raise ValueError("q_cost and r_cost must be provided")
         q_cost = np.asarray(q_cost, dtype=float)
         r_cost = np.asarray(r_cost, dtype=float)
-        if q_cost.shape != (12,):
-            raise ValueError(f"q_cost must contain 12 weights, got shape {q_cost.shape}")
+        if q_cost.shape != (6,):
+            raise ValueError(f"q_cost must contain 6 weights, got shape {q_cost.shape}")
         if r_cost.shape != (4,):
             raise ValueError(f"r_cost must contain 4 weights, got shape {r_cost.shape}")
+        max_body_rate = self._validate_speed_limits(
+            "max_body_rate", max_body_rate
+        )
 
         self.T = t_horizon
         self.N = n_nodes
@@ -144,6 +144,7 @@ class Controller:
             / (self.quad.max_thrust - self.quad.min_thrust)
         )
         self.hover_u = float(np.clip(self.hover_u, self.min_u, self.max_u))
+        self.max_body_rate = self._ned_limits_to_xyz(max_body_rate)
         self.dt = self.T / self.N
         self.control_dt = self.dt
         self.substeps = 1
@@ -152,14 +153,13 @@ class Controller:
             self.substeps = math.ceil(expected_frequency * self.dt)
             self.control_dt = 1.0 / expected_frequency
 
-        self.p = cs.MX.sym("p", 3)
         self.q = cs.MX.sym("a", 4)
-        self.v = cs.MX.sym("v", 3)
         self.r = cs.MX.sym("r", 3)
-        self.preferred_step = None
+        self.target_attitude = None
+        self.target_common_thrust = self.hover_u
 
-        self.x = cs.vertcat(self.p, self.q, self.v, self.r)
-        self.state_dim = 13
+        self.x = cs.vertcat(self.q, self.r)
+        self.state_dim = 7
 
         u1 = cs.MX.sym("u1")
         u2 = cs.MX.sym("u2")
@@ -179,11 +179,14 @@ class Controller:
                 "x_dot", [self.x, self.u], [dyn], ["x", "u"], ["x_dot"]
             )
 
-        q_diagonal = np.concatenate(
-            (q_cost[:3], np.mean(q_cost[3:6])[np.newaxis], q_cost[3:])
-        )
+        q_diagonal = np.concatenate(([0.0], q_cost[:3], q_cost[3:]))
         if q_mask is not None:
-            q_mask = np.concatenate((q_mask[:3], np.zeros(1), q_mask[3:]))
+            q_mask = np.asarray(q_mask, dtype=float)
+            if q_mask.shape != (6,):
+                raise ValueError(
+                    f"q_mask must contain 6 values, got shape {q_mask.shape}"
+                )
+            q_mask = np.concatenate(([0.0], q_mask))
             q_diagonal *= q_mask
 
         self.model = None
@@ -207,13 +210,6 @@ class Controller:
 
             ocp.cost.W = np.diag(np.concatenate((q_diagonal, r_cost)))
             ocp.cost.W_e = np.diag(q_diagonal)
-            terminal_cost = (
-                0
-                if solver_options is None
-                or not solver_options.get("terminal_cost", False)
-                else 1
-            )
-            ocp.cost.W_e *= terminal_cost
 
             ocp.cost.Vx = np.zeros((ny, nx))
             ocp.cost.Vx[:nx, :nx] = np.eye(nx)
@@ -229,6 +225,14 @@ class Controller:
             ocp.constraints.lbu = np.array([self.min_u] * 4)
             ocp.constraints.ubu = np.array([self.max_u] * 4)
             ocp.constraints.idxbu = np.array([0, 1, 2, 3])
+
+            rate_state_indices = np.arange(4, 7, dtype=int)
+            ocp.constraints.idxbx = rate_state_indices
+            ocp.constraints.lbx = -self.max_body_rate
+            ocp.constraints.ubx = self.max_body_rate
+            ocp.constraints.idxbx_e = rate_state_indices
+            ocp.constraints.lbx_e = -self.max_body_rate
+            ocp.constraints.ubx_e = self.max_body_rate
 
             ocp.solver_options.qp_solver = "FULL_CONDENSING_HPIPM"
             ocp.solver_options.hessian_approx = "GAUSS_NEWTON"
@@ -249,16 +253,29 @@ class Controller:
         self.acados_sim_solver = (
             self.create_integrator(self.model) if enable_integrator else None
         )
-        self.time_traj = None
-        self.last_closest_index = 0
-
         self.logger = logger
         if self.logger:
             self.logger.info(f"Controller time horizon = {t_horizon}")
             self.logger.info(f"Controller steps = {n_nodes}")
             self.logger.info(f"Controller dt = {self.dt}")
             self.logger.info(f"Controller integration dt = {self.control_dt}")
+            self.logger.info(
+                f"Controller body-rate limits xyz = {self.max_body_rate}"
+            )
             self.logger.info(f"acados codegen root = {self.acados_codegen_root}")
+
+    @staticmethod
+    def _validate_speed_limits(name: str, limits) -> np.ndarray:
+        values = np.asarray(limits, dtype=float)
+        if values.shape != (3,):
+            raise ValueError(f"{name} must contain 3 values, got shape {values.shape}")
+        if not np.all(np.isfinite(values)) or np.any(values <= 0.0):
+            raise ValueError(f"{name} values must be finite and positive")
+        return values
+
+    @staticmethod
+    def _ned_limits_to_xyz(limits: np.ndarray) -> np.ndarray:
+        return np.abs(Controller.FRAME_TRANSFORM) @ limits
 
     def _acados_codegen_paths(
         self, model_name: str, solver_kind: str
@@ -304,39 +321,15 @@ class Controller:
 
     def quad_dynamics(self, rdrv_d):
         x_dot = cs.vertcat(
-            self.p_dynamics(),
             self.q_dynamics(),
-            self.v_dynamics(rdrv_d),
             self.w_dynamics(),
         )
         return cs.Function(
-            "x_dot", [self.x[:13], self.u], [x_dot], ["x", "u"], ["x_dot"]
+            "x_dot", [self.x, self.u], [x_dot], ["x", "u"], ["x_dot"]
         )
-
-    def p_dynamics(self):
-        return self.v
 
     def q_dynamics(self):
         return 0.5 * cs.mtimes(skew_symmetric(self.r), self.q)
-
-    def v_dynamics(self, rdrv_d):
-        f_thrust = self.motor_command_to_thrust(self.u)
-        g = cs.vertcat(0.0, 0.0, -9.81)
-        a_thrust = (
-            cs.vertcat(
-                0.0, 0.0, (f_thrust[0] + f_thrust[1] + f_thrust[2] + f_thrust[3])
-            )
-            / self.quad.mass
-        )
-
-        v_dyn = v_dot_q(a_thrust, self.q) + g
-
-        if rdrv_d is not None:
-            v_b = v_dot_q(self.v, quaternion_inverse(self.q))
-            rdrv_drag = v_dot_q(cs.mtimes(rdrv_d, v_b), self.q)
-            v_dyn += rdrv_drag
-
-        return v_dyn
 
     def w_dynamics(self):
         f_thrust = self.motor_command_to_thrust(self.u)
@@ -368,130 +361,40 @@ class Controller:
             self.quad.max_thrust - self.quad.min_thrust
         )
 
-    def update_trajectory(
-        self, trajectory: np.ndarray, preferred_speed: float | None = None
-    ):
-        traj = self._normalize_reference_trajectory(trajectory)
-        if preferred_speed is None:
-            self.preferred_step = None
-            self.time_traj = traj
-        else:
-            self.preferred_step = preferred_speed * self.T / self.N / self.substeps
-            self.time_traj = self._resample_reference_trajectory(
-                traj, self.preferred_step
-            )
+    @property
+    def has_target(self) -> bool:
+        return self.target_attitude is not None
 
-        self.time_traj[:, :3] = np.array(
-            [self.ned_to_xyz_vector(point) for point in self.time_traj[:, :3]]
+    def update_target(
+        self, attitude_ned: np.ndarray, common_thrust: float
+    ) -> None:
+        attitude_ned = np.asarray(attitude_ned, dtype=float)
+        if attitude_ned.shape != (4,):
+            raise ValueError(
+                f"target attitude must have shape (4,), got {attitude_ned.shape}"
+            )
+        if not np.all(np.isfinite(attitude_ned)):
+            raise ValueError("target attitude must be finite")
+        if not math.isfinite(common_thrust):
+            raise ValueError("common_thrust must be finite")
+
+        self.target_attitude = self.ned_to_xyz_quat(
+            self.normalize_quat(attitude_ned)
         )
-        if self.time_traj.shape[1] >= 7:
-            self.time_traj[:, 3:7] = np.array(
-                [self.ned_to_xyz_quat(quat) for quat in self.time_traj[:, 3:7]]
-            )
-            self.time_traj[:, 3:7] = self.make_quat_sequence_continuous(
-                self.time_traj[:, 3:7]
-            )
-        if self.time_traj.shape[1] >= 10:
-            self.time_traj[:, 7:10] = np.array(
-                [self.ned_to_xyz_vector(vel) for vel in self.time_traj[:, 7:10]]
-            )
-        if self.time_traj.shape[1] >= 13:
-            self.time_traj[:, 10:13] = np.array(
-                [self.ned_to_xyz_vector(rate) for rate in self.time_traj[:, 10:13]]
-            )
-
-        # self.logger.info(f"Got new trajectory = {self.time_traj}")
-        self.last_closest_index = 0
-
-    def _normalize_reference_trajectory(self, trajectory: np.ndarray) -> np.ndarray:
-        traj = np.array(trajectory, dtype=float, copy=True)
-        if traj.ndim == 1:
-            traj = traj.reshape(1, -1)
-        if traj.ndim != 2 or traj.shape[1] < 3:
-            raise ValueError(
-                f"Trajectory must be Nx3 or wider, got shape {traj.shape}."
-            )
-        if traj.shape[1] == 4:
-            traj = np.column_stack((traj[:, :3], self.yaw_to_quat(traj[:, 3])))
-        elif 4 < traj.shape[1] < 7:
-            raise ValueError(
-                "Trajectory with attitude must use Nx4 xyz+yaw or Nx7 xyz+quaternion."
-            )
-        return traj
-
-    def _resample_reference_trajectory(
-        self, traj: np.ndarray, preferred_step: float
-    ) -> np.ndarray:
-        if len(traj) < 2 or preferred_step <= 0.0:
-            return np.array(traj, dtype=float, copy=True)
-
-        segment_lengths = np.linalg.norm(np.diff(traj[:, :3], axis=0), axis=1)
-        total_length = float(np.sum(segment_lengths))
-        if total_length <= 1e-9:
-            return np.array(traj, dtype=float, copy=True)
-
-        cumulative = np.concatenate(([0.0], np.cumsum(segment_lengths)))
-        sample_distances = np.arange(0.0, total_length, preferred_step)
-        if len(sample_distances) == 0 or not np.isclose(
-            sample_distances[-1], total_length
-        ):
-            sample_distances = np.append(sample_distances, total_length)
-
-        rows = [
-            self._interpolate_reference_row(traj, cumulative, segment_lengths, distance)
-            for distance in sample_distances
-        ]
-        return np.vstack(rows)
-
-    def _interpolate_reference_row(
-        self,
-        traj: np.ndarray,
-        cumulative: np.ndarray,
-        segment_lengths: np.ndarray,
-        distance: float,
-    ) -> np.ndarray:
-        if distance >= cumulative[-1]:
-            return traj[-1].copy()
-
-        segment_idx = max(0, np.searchsorted(cumulative, distance, side="right") - 1)
-        while (
-            segment_idx < len(segment_lengths) - 1
-            and segment_lengths[segment_idx] <= 1e-9
-        ):
-            segment_idx += 1
-
-        segment_length = segment_lengths[segment_idx]
-        if segment_length <= 1e-9:
-            return traj[segment_idx].copy()
-
-        t = (distance - cumulative[segment_idx]) / segment_length
-        start = traj[segment_idx]
-        end = traj[segment_idx + 1]
-        row = start + t * (end - start)
-        row[:3] = start[:3] + t * (end[:3] - start[:3])
-        if traj.shape[1] >= 7:
-            row[3:7] = self.slerp_quat(start[3:7], end[3:7], float(t))
-        return row
-
-    def _reference_state_from_point(self, point: np.ndarray) -> np.ndarray:
-        reference = np.zeros(13, dtype=float)
-        reference[:3] = point[:3]
-        if len(point) >= 7:
-            reference[3:7] = self.normalize_quat(point[3:7])
-        else:
-            reference[3] = 1.0
-        if len(point) >= 10:
-            reference[7:10] = point[7:10]
-        if len(point) >= 13:
-            reference[10:13] = point[10:13]
-        return reference
+        self.target_common_thrust = float(
+            np.clip(common_thrust, self.min_u, self.max_u)
+        )
 
     def state_ned_to_xyz(self, state: np.ndarray) -> np.ndarray:
-        xyz_state = np.array(state, dtype=float, copy=True)
-        xyz_state[0:3] = self.ned_to_xyz_vector(xyz_state[0:3])
-        xyz_state[3:7] = self.ned_to_xyz_quat(xyz_state[3:7])
-        xyz_state[7:10] = self.ned_to_xyz_vector(xyz_state[7:10])
-        xyz_state[10:13] = self.ned_to_xyz_vector(xyz_state[10:13])
+        xyz_state = np.asarray(state, dtype=float).copy()
+        if xyz_state.shape == (13,):
+            xyz_state = np.concatenate((xyz_state[3:7], xyz_state[10:13]))
+        if xyz_state.shape != (7,):
+            raise ValueError(
+                f"angular state must have shape (7,), got {xyz_state.shape}"
+            )
+        xyz_state[0:4] = self.ned_to_xyz_quat(xyz_state[0:4])
+        xyz_state[4:7] = self.ned_to_xyz_vector(xyz_state[4:7])
         return xyz_state
 
     def integrate_control_step(
@@ -504,61 +407,17 @@ class Controller:
         return np.asarray(self.acados_sim_solver.simulate(x=x_init, u=u), dtype=float)
 
     def run_optimization(self, initial_state=None):
-        if self.time_traj is None or len(self.time_traj) == 0:
-            return np.zeros(4)
-
         if initial_state is None:
-            initial_state = [0, 0, 0] + [1, 0, 0, 0] + [0, 0, 0] + [0, 0, 0]
+            initial_state = [1, 0, 0, 0, 0, 0, 0]
 
         x_init = self.state_ned_to_xyz(initial_state)
+        if not self.has_target:
+            return np.zeros(4), x_init
 
-        starting_index = (
-            np.argmin(
-                np.sum(
-                    (self.time_traj[self.last_closest_index :, :3] - x_init[:3]) ** 2,
-                    axis=1,
-                )
-            )
-            + self.last_closest_index
-        )
-
-        if np.dot(x_init[3:7], self.time_traj[starting_index, 3:7]) < 0.0:
-            x_init[3:7] *= -1.0
-
-        starting_row = self.time_traj[starting_index].copy()
-        starting_row[:3] = x_init[:3]
-        if len(starting_row) >= 7:
-            starting_row[3:7] = x_init[3:7]
-        if len(starting_row) >= 10:
-            starting_row[7:10] = x_init[7:10]
-        if len(starting_row) >= 13:
-            starting_row[10:13] = x_init[10:13]
-        
-        starting_trajectory = np.vstack([starting_row, self.time_traj[starting_index]])
-        
-        if self.preferred_step is not None:
-            starting_trajectory = self._resample_reference_trajectory(
-                starting_trajectory, self.preferred_step
-            )
-        
-        full_trajectory = np.vstack((starting_trajectory, self.time_traj[starting_index + 1 : starting_index + self.N * self.substeps]))
-        used_substeps = self.substeps
-        local_trajectory = []
-        while (len(local_trajectory) < self.N + 1) and (used_substeps * 2 > self.substeps):
-            local_trajectory = full_trajectory[:self.N * used_substeps + 1 : used_substeps]
-            used_substeps -= 1
-        used_substeps += 1
-
-        if len(local_trajectory) < self.N + 1:
-            pad_len = self.N + 1 - len(local_trajectory)
-            pad_value = self.time_traj[-1]
-            pad_rows = np.repeat(
-                pad_value[None, :],
-                pad_len,
-                axis=0
-            )
-            local_trajectory = np.vstack([local_trajectory, pad_rows])
-        self.last_closest_index = starting_index
+        target_attitude = self.target_attitude.copy()
+        if np.dot(x_init[:4], target_attitude) < 0.0:
+            target_attitude *= -1.0
+        reference = np.concatenate((target_attitude, np.zeros(3)))
 
         self.acados_ocp_solver.set(0, "lbx", x_init)
         self.acados_ocp_solver.set(0, "ubx", x_init)
@@ -566,17 +425,13 @@ class Controller:
         for j in range(self.N):
             y_ref = np.concatenate(
                 (
-                    self._reference_state_from_point(local_trajectory[j]),
-                    np.array(
-                        [self.hover_u, self.hover_u, self.hover_u, self.hover_u],
-                        dtype=float,
-                    ),
+                    reference,
+                    np.full(4, self.target_common_thrust, dtype=float),
                 )
             )
             self.acados_ocp_solver.set(j, "yref", y_ref)
 
-        y_refN = self._reference_state_from_point(local_trajectory[self.N])
-        self.acados_ocp_solver.set(self.N, "yref", y_refN)
+        self.acados_ocp_solver.set(self.N, "yref", reference)
 
         self.acados_ocp_solver.solve()
 

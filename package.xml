@@ -2,11 +2,9 @@
 <package format="3">
   <name>quadrotor_acados</name>
   <version>0.1.0</version>
-  <description>ROS 2 PX4 MPC bridge subscribing to Path and VehicleOdometry and publishing PX4 actuator or body-rate setpoints.</description>
+  <description>ROS 2 PX4 MPC controller for intercepting an observed moving target.</description>
   <maintainer email="maintainer@example.com">quadrotor_acados</maintainer>
   <license>MIT</license>
-
-  <buildtool_depend>ament_python</buildtool_depend>
 
   <depend>rclpy</depend>
   <depend>ament_index_python</depend>

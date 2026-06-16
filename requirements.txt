@@ -4,4 +4,8 @@ numpy
 casadi
 scipy
 setuptools
+Cython
+catkin_pkg
+empy==3.3.4
+lark
 pyquaternion
