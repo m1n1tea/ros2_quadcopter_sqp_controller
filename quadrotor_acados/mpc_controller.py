@@ -139,7 +139,11 @@ class Controller:
         self.quad = quad
         self.max_u = quad.max_input_value
         self.min_u = quad.min_input_value
-        self.hover_u = quad.mass * 9.81 / 4 * self.quad.max_thrust
+        self.hover_u = (
+            (quad.mass * 9.81 / 4.0 - self.quad.min_thrust)
+            / (self.quad.max_thrust - self.quad.min_thrust)
+        )
+        self.hover_u = float(np.clip(self.hover_u, self.min_u, self.max_u))
         self.dt = self.T / self.N
         self.control_dt = self.dt
         self.substeps = 1
@@ -316,7 +320,7 @@ class Controller:
         return 0.5 * cs.mtimes(skew_symmetric(self.r), self.q)
 
     def v_dynamics(self, rdrv_d):
-        f_thrust = self.u * self.quad.max_thrust
+        f_thrust = self.motor_command_to_thrust(self.u)
         g = cs.vertcat(0.0, 0.0, -9.81)
         a_thrust = (
             cs.vertcat(
@@ -335,7 +339,7 @@ class Controller:
         return v_dyn
 
     def w_dynamics(self):
-        f_thrust = self.u * self.quad.max_thrust
+        f_thrust = self.motor_command_to_thrust(self.u)
 
         x_f = cs.MX(self.quad.x_f)
         y_f = cs.MX(self.quad.y_f)
@@ -357,6 +361,11 @@ class Controller:
                 - (self.quad.J[1] - self.quad.J[0]) * self.r[0] * self.r[1]
             )
             / self.quad.J[2],
+        )
+
+    def motor_command_to_thrust(self, u):
+        return self.quad.min_thrust + u * (
+            self.quad.max_thrust - self.quad.min_thrust
         )
 
     def update_trajectory(

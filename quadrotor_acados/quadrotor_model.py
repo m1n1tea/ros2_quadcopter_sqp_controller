@@ -9,6 +9,8 @@ class QuadrotorParams:
     mass: float
     min_thrust: float
     max_thrust: float
+    min_rotor_speed: float
+    max_rotor_speed: float
     J: np.ndarray
     x_f: np.ndarray
     y_f: np.ndarray
@@ -35,6 +37,8 @@ def load_params(mpc_node) -> QuadrotorParams:
         mass=mass,
         min_thrust=min_thrust,
         max_thrust=max_thrust,
+        min_rotor_speed=min_speed,
+        max_rotor_speed=max_speed,
         J=J,
         x_f=x_f,
         y_f=y_f,

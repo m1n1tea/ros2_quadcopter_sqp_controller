@@ -38,6 +38,9 @@ class Px4MpcNode(Node):
         self.command_output_mode = str(
             self._get_param("command_output_mode", "actuator_motors")
         ).lower()
+        self.use_normalized_rotor_speed = bool(
+            self._get_param("use_normalized_rotor_speed", False)
+        )
         self.offboard_control_mode_topic = self.get_parameter(
             "offboard_control_mode_topic"
         ).value
@@ -54,8 +57,6 @@ class Px4MpcNode(Node):
         horizon_nodes = int(self.get_parameter("horizon_nodes").value)
         q_cost = np.asarray(self.get_parameter("q_cost").value, dtype=float)
         r_cost = np.asarray(self.get_parameter("r_cost").value, dtype=float)
-        self.min_thrust = 0
-        self.max_thrust = 1
         if self.command_output_mode not in (
             "actuator_motors",
             "vehicle_rates_setpoint",
@@ -91,6 +92,8 @@ class Px4MpcNode(Node):
 
         try:
             self.quad = load_params(self)
+            if self.quad.max_thrust <= self.quad.min_thrust:
+                raise ValueError("max_rotor_speed must be greater than min_rotor_speed")
             self.controller = Controller(
                 quad=self.quad,
                 t_horizon=horizon_sec,
@@ -157,6 +160,7 @@ class Px4MpcNode(Node):
             "px4_mpc_node started. "
             f"path={self.path_topic}, odom={self.odom_topic}, vehicle_status={self.vehicle_status_topic}, "
             f"output_mode={self.command_output_mode}, actuator={self.actuator_topic}, "
+            f"use_normalized_rotor_speed={self.use_normalized_rotor_speed}, "
             f"vehicle_rates_setpoint={self.vehicle_rates_setpoint_topic}, "
             f"offboard_control_mode={self.offboard_control_mode_topic}, "
             f"vehicle_command={self.vehicle_command_topic}, "
@@ -379,9 +383,10 @@ class Px4MpcNode(Node):
         next_state_xyz = self.controller.integrate_control_step(current_state, cmd)
         self.get_logger().info(f"Got control = {list(cmd)}")
         self.get_logger().info(f"Predicted next state: {next_state_xyz}")
+
         if self.command_output_mode == "vehicle_rates_setpoint":
             body_rates_px4 = Controller.xyz_to_ned_vector(next_x[10:13])
-            normalized_thrust = self.motor_command_to_thrust(cmd)
+            normalized_thrust = self.motor_commands_to_output_value(cmd)
             with self.lock:
                 self.last_body_rates = body_rates_px4.copy()
                 self.last_thrust = normalized_thrust
@@ -397,7 +402,8 @@ class Px4MpcNode(Node):
             self.vehicle_rates_setpoint_pub.publish(msg)
 
         if  self.command_output_mode == "actuator_motors":
-            self.get_logger().info(f"Send control = {list(cmd)}")
+            actuator_cmd = self.motor_command_to_actuator_control(cmd)
+            self.get_logger().info(f"Send control = {list(actuator_cmd)}")
             msg = ActuatorMotors()
             timestamp_us = int(self.get_clock().now().nanoseconds / 1000)
             if hasattr(msg, "timestamp"):
@@ -408,29 +414,34 @@ class Px4MpcNode(Node):
                 msg.reversible_flags = 0
 
             control = [float("nan")] * 12
-            control[0:4] = [float(cmd[0]), float(cmd[1]), float(cmd[2]), float(cmd[3])]
+            control[0:4] = [
+                float(actuator_cmd[0]),
+                float(actuator_cmd[1]),
+                float(actuator_cmd[2]),
+                float(actuator_cmd[3]),
+            ]
             msg.control = control
             self.motor_pub.publish(msg)
 
-    def publish_vehicle_rates_setpoint(
-        self, body_rates_px4: np.ndarray, normalized_thrust: float
-    ) -> None:
-        if self.vehicle_rates_setpoint_pub is None:
-            return
+    def motor_commands_to_output_value(self, cmd: np.ndarray) -> float:
+        return float(np.mean(self.motor_command_to_output_value(cmd)))
 
-        msg = VehicleRatesSetpoint()
-        if hasattr(msg, "timestamp"):
-            msg.timestamp = int(self.get_clock().now().nanoseconds / 1000)
+    def motor_command_to_actuator_control(self, cmd: np.ndarray) -> np.ndarray:
+        return self.motor_command_to_output_value(cmd)
 
-        msg.roll = float(body_rates_px4[0])
-        msg.pitch = float(body_rates_px4[1])
-        msg.yaw = float(body_rates_px4[2])
-        msg.thrust_body = [0.0, 0.0, -float(normalized_thrust)]
-        self.vehicle_rates_setpoint_pub.publish(msg)
+    def motor_command_to_output_value(self, cmd: np.ndarray) -> np.ndarray:
+        cmd = np.clip(np.asarray(cmd, dtype=float), 0.0, 1.0)
+        if not self.use_normalized_rotor_speed:
+            return cmd
 
-    def motor_command_to_thrust(self, cmd: np.ndarray) -> float:
-        thrust = float(np.sum(cmd) / 4.0)
-        return float(np.clip(thrust, self.min_thrust, self.max_thrust))
+        rotor_speed = np.sqrt(
+            self.quad.min_rotor_speed**2
+            + cmd
+            * (self.quad.max_rotor_speed**2 - self.quad.min_rotor_speed**2)
+        )
+        return (rotor_speed - self.quad.min_rotor_speed) / (
+            self.quad.max_rotor_speed - self.quad.min_rotor_speed
+        )
 
 
 def main(args=None):

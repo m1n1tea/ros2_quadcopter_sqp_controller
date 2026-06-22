@@ -3,7 +3,7 @@ px4_mpc_node:
     path_topic: /reference_path
     odometry_topic: /fmu/out/vehicle_odometry
     vehicle_status_topic: /fmu/out/vehicle_status
-    command_output_mode: vehicle_rates_setpoint # actuator_motors or vehicle_rates_setpoint
+    command_output_mode: actuator_motors # actuator_motors or vehicle_rates_setpoint
     actuator_topic: /fmu/in/actuator_motors
     vehicle_rates_setpoint_topic: /fmu/in/vehicle_rates_setpoint
     offboard_control_mode_topic: /fmu/in/offboard_control_mode
@@ -11,11 +11,12 @@ px4_mpc_node:
     control_rate_hz: 200.0
     offboard_control_rate_hz: 10.0
     preferred_speed: 1.0
-    estimate_z_velocity_from_position: true
     horizon_sec: 2.0
     horizon_nodes: 30
     q_cost: [30.0, 30.0, 40.0, 2.0, 2.0, 0.8, 0.4, 0.4, 1.0, 0.1, 0.1, 0.03]
     r_cost: [0.01, 0.01, 0.01, 0.01]
+    estimate_z_velocity_from_position: false
+    use_normalized_rotor_speed: true
     uav:
       name: x500
       parameters:
@@ -30,16 +31,5 @@ px4_mpc_node:
           zz: 0.04000000000000001 # kg*m^2
         moment_constant: 0.016
         thrust_constant: 8.54858e-06
-        min_rotor_speed: 0
+        min_rotor_speed: 150
         max_rotor_speed: 1000
-        omega_to_pwm_coefficient:
-          x_2: 0.001142
-          x_1: 0.2273
-          x_0: 914.2
-        PWM_MIN: 1075
-        PWM_MAX: 1950
-        input_scaling: 1000
-        zero_position_armed: 10
-    environment:
-      parameters:
-        gravity: 9.81
