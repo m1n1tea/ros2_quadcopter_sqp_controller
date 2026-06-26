@@ -2,13 +2,66 @@
 
 ## ROS 2 PX4 MPC Node
 This repository now includes a ROS 2 package `quadrotor_acados` that:
-- subscribes to `nav_msgs/msg/Odometry` for target direction/range observations,
+- subscribes to `px4_msgs/msg/VehicleAttitudeSetpoint` for desired attitude and
+  collective-thrust references,
 - uses only attitude quaternion and angular velocity from
   `px4_msgs/msg/VehicleOdometry`,
 - publishes `px4_msgs/msg/ActuatorMotors` by default, or
   `px4_msgs/msg/VehicleRatesSetpoint` when configured.
 
 The launch file uses `quadrotor_acados/config/x500.yaml` by default.
+
+### Hover with PX4 position control, then hand over to MPC
+
+`px4_pid_node` publishes PX4 `TrajectorySetpoint` messages; the actual
+position controller is PX4.  A NED z value of `-2.0` is approximately 2 m
+above the local origin.  First start the PID bridge, then publish its one-point
+reference:
+```bash
+# Terminal 1: PX4 SITL (or the vehicle bridge) must already be running.
+# Terminal 2
+ros2 run quadrotor_acados px4_pid_node
+
+# Terminal 3
+ros2 run quadrotor_acados single_point_path_publisher --ros-args \
+  -p x:=0.0 -p y:=0.0 -p z:=-2.0
+```
+
+Wait for the vehicle to settle near z = -2 m.  While it is still hovering,
+start the target publisher and pre-initialize MPC without allowing it to
+publish PX4 commands:
+```bash
+# Terminal 4
+ros2 launch quadrotor_acados launch_moving_target.py z:=-2.0
+
+# Terminal 5
+ros2 run quadrotor_acados px4_mpc_node --ros-args \
+  --params-file $(ros2 pkg prefix quadrotor_acados)/share/quadrotor_acados/config/x500.yaml \
+  -p enabled:=false
+```
+
+Then stop `px4_pid_node` and immediately enable MPC:
+```bash
+ros2 param set /px4_mpc_node enabled true
+```
+
+Do not run enabled PID and MPC nodes together: both publish PX4 Offboard
+control-mode and vehicle-command messages.  The `enabled` parameter defaults
+to `true`; its purpose is to let MPC initialize before the handoff, not to
+change normal direct-start behavior.
+
+For the same handoff as one command, run this workspace-level script:
+```bash
+./run_pid_to_mpc.sh
+```
+It launches PX4 `gz_x500`, waits for the PID log line `Reached final reference
+point`, starts the moving-target publisher and a disabled MPC, then stops PID
+and enables MPC. On shutdown it also turns `target.log` into
+`target_tracking.png` and `target_tracking_attitude.png` under
+`logs/pid_to_mpc_*`.
+For an existing PX4 instance, use `START_PX4=0 ./run_pid_to_mpc.sh`; all
+supported position, target, timeout, and parameter-file overrides are listed
+by `./run_pid_to_mpc.sh --help`.
 
 Build and run:
 ```bash
@@ -50,31 +103,31 @@ The MPC state is `[quaternion, body_rates]`; position and linear velocity do not
 enter the optimizer. `max_body_rate` configures hard FRD roll, pitch, and yaw
 rate limits in `rad/s`.
 
-The target observation uses `nav_msgs/msg/Odometry` as a transport:
-- `pose.pose.position`: unit target direction in the PX4 NED world frame.
-- `twist.twist.linear.x`: range in meters, or `NaN` when range is unavailable.
+`px4_mpc_node` receives `VehicleAttitudeSetpoint` on
+`target_attitude_setpoint_topic`. Its `q_d` field is the desired NED/FRD
+quaternion, and `thrust_body[2]` is the negative normalized physical thrust.
+The node converts that physical thrust to the MPC's configured motor-command
+range before optimizing torque commands.
 
-The node converts target direction and collective thrust into a desired
-attitude. It points yaw toward the target and tilts toward it while reserving
-enough vertical thrust to compensate gravity. `max_tilt_deg` caps this tilt.
-`preferred_common_thrust` is the baseline per-motor command; a negative value
-selects calculated hover thrust. When range is available, the command is
-adjusted by range and direction: horizontal or upward targets increase thrust,
-while downward targets reduce it. The result is clipped to
-`min_common_thrust`/`max_common_thrust`.
+`moving_target_publisher` calculates this setpoint from vehicle odometry and
+the simulated moving target. It applies configured direction/range noise,
+points yaw toward the target, and limits tilt with `max_tilt_deg`. Its thrust
+parameters include `uav_mass`, `thrust_constant`, `min_rotor_speed`, and
+`max_rotor_speed`; this preserves correct hover compensation with a nonzero
+minimum rotor speed.
 
-### Target topic examples
+### Target setpoint example
 
-Publish a target direction north and slightly upward, without range:
+Publish a stationary level-attitude reference with 57% normalized physical
+thrust:
 ```bash
 ros2 topic pub --once --qos-reliability reliable --qos-durability transient_local \
-  /target/odometry nav_msgs/msg/Odometry \
-  "{pose: {pose: {position: {x: 0.9285, y: 0.0, z: -0.3714}}}, \
-    twist: {twist: {linear: {x: .nan}}}}"
+  /target/attitude_setpoint px4_msgs/msg/VehicleAttitudeSetpoint \
+  "{q_d: [1.0, 0.0, 0.0, 0.0], thrust_body: [0.0, 0.0, -0.57]}"
 ```
 
 The debug publisher computes a moving world target, listens to vehicle
-odometry, and publishes a noisy relative observation. Run it directly:
+odometry, and publishes noisy attitude/thrust setpoints. Run it directly:
 ```bash
 ros2 run quadrotor_acados moving_target_publisher --ros-args \
   -p x:=30.0 -p y:=0.0 -p z:=-5.0 \
@@ -86,19 +139,28 @@ ros2 run quadrotor_acados moving_target_publisher --ros-args \
 
 `direction_noise_std` is Gaussian noise added independently to the three
 direction components before renormalization. Set `publish_distance:=false` to
-test direction-only control. Set `log_interval_sec:=0.0` to disable logs.
+hold collective thrust at its baseline. `log_interval_sec:=0.0` disables the
+human-readable status log. The publisher also writes JSON telemetry records at
+`telemetry_log_interval_sec` (default 0.1 s), containing synchronized vehicle
+and target NED positions, desired/observed quaternions and Euler angles, and
+thrust. It writes a collision record when the distance first enters
+`collision_radius_m` (default 0.5 m).
 
-Plot the vehicle and target trajectories and mark collision events:
+Capture its output and produce a 3D quadcopter/target/collision plot plus a
+desired-versus-observed roll, pitch, and yaw plot:
 ```bash
+ros2 run quadrotor_acados moving_target_publisher --ros-args \
+  -p telemetry_log_interval_sec:=0.05 2>&1 | tee ros2_log_target
+
 python3 utils/analyze_target_tracking_log.py \
-  --log ros2_log_mpc \
   --target-log ros2_log_target \
-  --save-plot target_tracking.png
+  --save-plot target_tracking.png --no-show
 ```
 
-Omit `--target-log` when the MPC log contains `Received target observation`
-messages. The first collision is shown as a red star; later collisions are
-shown as orange crosses.
+The second image is saved as `target_tracking_attitude.png`; override it with
+`--save-attitude-plot`. The first collision is a red star and later collisions
+are orange crosses. The analyzer retains legacy controller-log parsing when
+new telemetry is unavailable.
 
 Set `command_output_mode: vehicle_rates_setpoint` to publish body-rate/thrust
 setpoints on `vehicle_rates_setpoint_topic` instead of direct motor commands.
